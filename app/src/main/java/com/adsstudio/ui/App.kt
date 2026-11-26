@@ -7,44 +7,47 @@ import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Lock
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -52,16 +55,15 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
-import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AdsStudioApp(vm: AppViewModel = viewModel()) {
-    AdsStudioTheme {
+    StudioTheme {
         val state by vm.state.collectAsStateWithLifecycle()
         val context = LocalContext.current
-
         val activity = context as? Activity
+        val reducedMotion = rememberReducedMotion()
+
         DisposableEffect(state.busy) {
             if (state.busy != null) {
                 activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -79,263 +81,388 @@ fun AdsStudioApp(vm: AppViewModel = viewModel()) {
             ActivityResultContracts.PickVisualMedia()
         ) { uri -> if (uri != null) vm.setAd(uri) }
 
-        Scaffold(
-            topBar = { TopAppBar(title = { Text("Ads Studio") }) }
-        ) { padding ->
+        val pickVideo: () -> Unit = {
+            videoPicker.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
+            )
+        }
+
+        val pickAd: () -> Unit = {
+            imagePicker.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+            )
+        }
+
+        val openVideo: (Uri) -> Unit = { output ->
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(output, "video/mp4")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            runCatching { context.startActivity(intent) }
+        }
+
+        val shareVideo: (Uri) -> Unit = { output ->
+            val intent = Intent(Intent.ACTION_SEND).apply {
+                type = "video/mp4"
+                putExtra(Intent.EXTRA_STREAM, output)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            runCatching {
+                context.startActivity(Intent.createChooser(intent, "Поделиться"))
+            }
+        }
+
+        StudioBackground {
             Column(
                 modifier = Modifier
-                    .padding(padding)
                     .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
                     .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                    .padding(horizontal = 20.dp)
+                    .padding(top = 8.dp, bottom = 28.dp),
+                verticalArrangement = Arrangement.spacedBy(22.dp)
             ) {
-                Text(
-                    "Нарезка клипов 9:16 + реклама. Всё считается на телефоне.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Reveal(0) { Header() }
 
                 val videoUri = state.videoUri
                 if (videoUri == null) {
-                    Button(
-                        onClick = {
-                            videoPicker.launch(
-                                PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.VideoOnly
-                                )
-                            )
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Выбрать видео")
-                    }
-                    Text(
-                        "При первом распознавании скачается русская модель Vosk (~45 МБ).",
-                        style = MaterialTheme.typography.bodySmall
+                    OnboardingContent(
+                        llmEnabled = state.llmEnabled,
+                        onPickVideo = pickVideo
                     )
                 } else {
-                    VideoPreview(videoUri)
-
-                    state.info?.let { info ->
-                        Text(
-                            "${formatDuration(info.durationMs)} · ${info.width}×${info.height}",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    }
-
-                    Text("Формат клипа", style = MaterialTheme.typography.labelLarge)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutputRatio.values().forEach { ratio ->
-                            FilterChip(
-                                selected = state.ratio == ratio,
-                                onClick = { vm.setRatio(ratio) },
-                                label = { Text(ratio.label) }
-                            )
-                        }
-                    }
-
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "Нейросеть выбирает клипы",
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                            Text(
-                                if (state.llmReady) {
-                                    "Qwen2.5-0.5B · модель скачана"
-                                } else {
-                                    "Qwen2.5-0.5B · ~520 МБ, скачается один раз"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = state.llmEnabled,
-                            onCheckedChange = vm::setLlmEnabled,
-                            enabled = state.busy == null
-                        )
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = {
-                            videoPicker.launch(
-                                PickVisualMediaRequest(
-                                    ActivityResultContracts.PickVisualMedia.VideoOnly
-                                )
-                            )
-                        }) {
-                            Text("Другое видео")
-                        }
-
-                        TextButton(onClick = {
-                            if (state.adSet) {
-                                vm.clearAd()
-                            } else {
-                                imagePicker.launch(
-                                    PickVisualMediaRequest(
-                                        ActivityResultContracts.PickVisualMedia.ImageOnly
-                                    )
-                                )
-                            }
-                        }) {
-                            Text(if (state.adSet) "Убрать рекламу" else "Добавить рекламу")
-                        }
-                    }
-
-                    Button(
-                        onClick = vm::transcribe,
-                        enabled = state.busy == null && state.info != null,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            if (state.transcript.isEmpty()) "Распознать речь"
-                            else "Распознать заново"
-                        )
-                    }
-
-                    state.busy?.let { busy ->
-                        var elapsed by remember { mutableStateOf(0) }
-                        LaunchedEffect(busy) {
-                            elapsed = 0
-                            while (true) {
-                                kotlinx.coroutines.delay(1000)
-                                elapsed++
-                            }
-                        }
-                        Card {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    "$busy  ${elapsed / 60}:${(elapsed % 60).toString().padStart(2, '0')}"
-                                )
-                                val progress = state.progress
-                                if (progress != null) {
-                                    LinearProgressIndicator(
-                                        progress = progress,
-                                        modifier = Modifier.fillMaxWidth()
-                                    )
-                                } else {
-                                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                                }
-                            }
-                        }
-                    }
-
-                    state.notice?.let { notice ->
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.secondaryContainer
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(
-                                    notice,
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                                )
-                                TextButton(onClick = vm::dismissNotice) { Text("Ок") }
-                            }
-                        }
-                    }
-
-                    state.error?.let { error ->
-                        Card(
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.errorContainer
-                            )
-                        ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text(
-                                    error,
-                                    color = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                                TextButton(onClick = vm::dismissError) { Text("Закрыть") }
-                            }
-                        }
-                    }
-
-                    state.output?.let { output ->
-                        Card {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    "Клип сохранён в Movies/AdsStudio",
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Button(onClick = {
-                                        val intent = Intent(Intent.ACTION_VIEW).apply {
-                                            setDataAndType(output, "video/mp4")
-                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                        }
-                                        runCatching { context.startActivity(intent) }
-                                    }) {
-                                        Text("Открыть")
-                                    }
-
-                                    OutlinedButton(onClick = {
-                                        val intent = Intent(Intent.ACTION_SEND).apply {
-                                            type = "video/mp4"
-                                            putExtra(Intent.EXTRA_STREAM, output)
-                                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                        }
-                                        runCatching {
-                                            context.startActivity(
-                                                Intent.createChooser(intent, "Поделиться")
-                                            )
-                                        }
-                                    }) {
-                                        Text("Поделиться")
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    if (state.clips.isNotEmpty()) {
-                        Text(
-                            "Найденные моменты",
-                            style = MaterialTheme.typography.titleMedium
-                        )
-                        state.clips.forEach { clip ->
-                            ClipCard(
-                                clip = clip,
-                                enabled = state.busy == null,
-                                ratioLabel = state.ratio.label,
-                                onRename = { title -> vm.renameClip(clip, title) },
-                                onExport = { vm.export(clip) }
-                            )
-                        }
-                    } else if (state.transcript.isNotEmpty() && state.busy == null) {
-                        Text(
-                            "Речь распознана, но подходящих моментов не нашлось. " +
-                                "Попробуй видео подлиннее."
-                        )
-                    }
+                    ProjectContent(
+                        state = state,
+                        vm = vm,
+                        onPickVideo = pickVideo,
+                        onPickAd = pickAd,
+                        onOpen = openVideo,
+                        onShare = shareVideo
+                    )
                 }
+
+                Footer()
             }
         }
     }
 }
 
 @Composable
-private fun AdsStudioTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
-    MaterialTheme(
-        colorScheme = if (dark) darkColorScheme() else lightColorScheme(),
-        content = content
-    )
+private fun Header() {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Wordmark(Modifier.weight(1f))
+        LocalBadge()
+    }
+}
+
+@Composable
+private fun OnboardingContent(
+    llmEnabled: Boolean,
+    onPickVideo: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        Reveal(1) { Hero() }
+        Reveal(2) { StepStrip() }
+        Reveal(3) { ProjectPickerCard(onClick = onPickVideo) }
+        Reveal(4) { ModelsHint(llmEnabled) }
+    }
+}
+
+@Composable
+private fun Hero() {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            text = buildAnnotatedString {
+                withStyle(SpanStyle(color = StudioColors.Text)) {
+                    append("Длинное видео.\n")
+                }
+                withStyle(SpanStyle(color = StudioColors.Orange)) {
+                    append("Пять коротких.")
+                }
+            },
+            style = MaterialTheme.typography.displayLarge
+        )
+        Text(
+            "Нейросеть находит сильные моменты, режет и вставляет рекламу. " +
+                "Всё на телефоне, без облака.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = StudioColors.TextMuted
+        )
+    }
+}
+
+@Composable
+private fun ModelsHint(llmEnabled: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.Lock,
+            contentDescription = null,
+            tint = StudioColors.TextDim,
+            modifier = Modifier.size(12.dp)
+        )
+        Spacer(Modifier.width(6.dp))
+        Text(
+            text = if (llmEnabled) {
+                "Первый раз: Vosk 45 МБ + Qwen 520 МБ. Дальше — офлайн."
+            } else {
+                "Первый раз: Vosk 45 МБ. Дальше — офлайн."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = StudioColors.TextDim,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun ProjectContent(
+    state: UiState,
+    vm: AppViewModel,
+    onPickVideo: () -> Unit,
+    onPickAd: () -> Unit,
+    onOpen: (Uri) -> Unit,
+    onShare: (Uri) -> Unit
+) {
+    val videoUri = state.videoUri ?: return
+
+    Column(verticalArrangement = Arrangement.spacedBy(22.dp)) {
+        Reveal(0) {
+            SourceSection(
+                videoUri = videoUri,
+                info = state.info,
+                onChange = onPickVideo
+            )
+        }
+
+        Reveal(1) {
+            FormatSection(
+                selected = state.ratio,
+                onSelect = vm::setRatio
+            )
+        }
+
+        Reveal(2) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SectionHeader("03", "ИИ")
+                AiCard(
+                    enabled = state.llmEnabled,
+                    ready = state.llmReady,
+                    onToggle = vm::setLlmEnabled,
+                    interactive = state.busy == null
+                )
+            }
+        }
+
+        Reveal(3) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SectionHeader("04", "Реклама")
+                AdCard(
+                    adPreview = state.adPreview,
+                    onPick = onPickAd,
+                    onClear = vm::clearAd,
+                    enabled = state.busy == null
+                )
+            }
+        }
+
+        Reveal(4) {
+            ActionSection(state = state, onRun = vm::transcribe)
+        }
+
+        state.notice?.let { notice ->
+            Reveal(5) {
+                StudioBanner(
+                    text = notice,
+                    isError = false,
+                    onDismiss = vm::dismissNotice
+                )
+            }
+        }
+
+        state.error?.let { error ->
+            Reveal(5) {
+                StudioBanner(
+                    text = error,
+                    isError = true,
+                    onDismiss = vm::dismissError
+                )
+            }
+        }
+
+        state.output?.let { output ->
+            Reveal(5) {
+                SuccessCard(
+                    title = state.outputTitle,
+                    onOpen = { onOpen(output) },
+                    onShare = { onShare(output) }
+                )
+            }
+        }
+
+        if (state.clips.isNotEmpty()) {
+            Reveal(5) { ClipsSection(state = state, vm = vm) }
+        } else if (state.transcript.isNotEmpty() && state.busy == null) {
+            Reveal(5) { EmptyClips() }
+        }
+    }
+}
+
+@Composable
+private fun SourceSection(
+    videoUri: Uri,
+    info: VideoInfo?,
+    onChange: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SectionHeader("01", "Исходник")
+        VideoPreview(videoUri)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = if (info != null) {
+                        "${formatTimecode(info.durationMs)} · ${info.width}×${info.height}"
+                    } else {
+                        "Читаю видео…"
+                    },
+                    style = StudioType.mono,
+                    color = StudioColors.TextMuted
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "MP4 · MOV · всё локально",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = StudioColors.TextDim
+                )
+            }
+            TextButton(onClick = onChange) {
+                Icon(
+                    imageVector = Icons.Rounded.Edit,
+                    contentDescription = null,
+                    tint = StudioColors.TextMuted,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    "Заменить",
+                    color = StudioColors.TextMuted,
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun FormatSection(
+    selected: OutputRatio,
+    onSelect: (OutputRatio) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        SectionHeader("02", "Формат")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutputRatio.values().forEach { ratio ->
+                RatioCard(
+                    ratio = ratio,
+                    selected = selected == ratio,
+                    onClick = { onSelect(ratio) },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+        Text(
+            "Один и тот же клип можно экспортировать в каждом формате.",
+            style = MaterialTheme.typography.bodySmall,
+            color = StudioColors.TextDim
+        )
+    }
+}
+
+@Composable
+private fun ActionSection(
+    state: UiState,
+    onRun: () -> Unit
+) {
+    val hasTranscript = state.transcript.isNotEmpty()
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        PrimaryAction(
+            text = if (hasTranscript) "Нарезать заново" else "Распознать и нарезать",
+            enabled = state.busy == null && state.info != null,
+            onClick = onRun,
+            icon = if (hasTranscript) Icons.Rounded.Refresh else Icons.Rounded.PlayArrow
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Lock,
+                contentDescription = null,
+                tint = StudioColors.TextDim,
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = if (state.llmEnabled && !state.llmReady) {
+                    "Первый раз: Vosk 45 МБ + Qwen 520 МБ"
+                } else {
+                    "Всё локально · ничего не уходит в облако"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = StudioColors.TextDim,
+                textAlign = TextAlign.Center
+            )
+        }
+
+        state.busy?.let { busy ->
+            ProcessingCard(
+                busy = busy,
+                progress = state.progress
+            )
+        }
+    }
+}
+
+@Composable
+private fun ClipsSection(
+    state: UiState,
+    vm: AppViewModel
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SectionHeader(
+            number = "05",
+            title = "Моменты",
+            trailing = { CountPill("${state.clips.size} / 5") }
+        )
+        Text(
+            "Проверь границы, при желании переименуй и экспортируй.",
+            style = MaterialTheme.typography.bodySmall,
+            color = StudioColors.TextMuted
+        )
+        state.clips.forEachIndexed { index, clip ->
+            ClipCard(
+                index = index,
+                clip = clip,
+                videoUri = state.videoUri,
+                enabled = state.busy == null,
+                ratioLabel = state.ratio.label,
+                isExporting = state.exportingClipStart == clip.startMs && state.busy != null,
+                exportProgress = state.progress,
+                onRename = { title -> vm.renameClip(clip, title) },
+                onExport = { vm.export(clip) }
+            )
+        }
+    }
 }
 
 @Composable
@@ -352,102 +479,55 @@ private fun VideoPreview(uri: Uri) {
         onDispose { exoPlayer.release() }
     }
 
-    AndroidView(
-        factory = { ctx ->
-            PlayerView(ctx).apply {
-                player = exoPlayer
-                useController = true
-            }
-        },
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .height(220.dp)
-    )
-}
-
-@Composable
-private fun ClipCard(
-    clip: SuggestedClip,
-    enabled: Boolean,
-    ratioLabel: String,
-    onRename: (String) -> Unit,
-    onExport: () -> Unit
-) {
-    var editing by remember { mutableStateOf(false) }
-    var draft by remember(clip.title) { mutableStateOf(clip.title) }
-
-    Card {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    clip.title,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f)
-                )
-                TextButton(onClick = {
-                    draft = clip.title
-                    editing = true
-                }) {
-                    Text("Изменить")
-                }
-            }
-            Text(
-                "Имя файла: ${clip.title}.mp4",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
-            )
-            Text(
-                "${formatDuration(clip.startMs)} – ${formatDuration(clip.endMs)}",
-                style = MaterialTheme.typography.labelSmall
-            )
-            Text(
-                clip.text,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 4
-            )
-            Button(onClick = onExport, enabled = enabled) {
-                Text("Экспорт $ratioLabel")
-            }
-        }
-    }
-
-    if (editing) {
-        AlertDialog(
-            onDismissRequest = { editing = false },
-            title = { Text("Название клипа") },
-            text = {
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    label = { Text("Название") },
-                    singleLine = true
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    onRename(draft)
-                    editing = false
-                }) {
-                    Text("Сохранить")
+            .aspectRatio(16f / 9f)
+            .clip(RoundedCornerShape(22.dp))
+            .background(Color.Black)
+            .border(1.dp, StudioColors.BorderSoft, RoundedCornerShape(22.dp))
+    ) {
+        AndroidView(
+            factory = { ctx ->
+                PlayerView(ctx).apply {
+                    useController = true
+                    setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
                 }
             },
-            dismissButton = {
-                TextButton(onClick = { editing = false }) {
-                    Text("Отмена")
-                }
-            }
+            update = { view -> view.player = exoPlayer },
+            modifier = Modifier.fillMaxSize()
         )
     }
 }
 
-private fun formatDuration(ms: Long): String {
-    val totalSeconds = ms / 1000
-    val minutes = totalSeconds / 60
-    val seconds = totalSeconds % 60
-    return String.format(Locale.US, "%d:%02d", minutes, seconds)
+@Composable
+private fun Footer() {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(StudioColors.BorderSoft)
+        )
+        Spacer(Modifier.height(16.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                imageVector = Icons.Rounded.Lock,
+                contentDescription = null,
+                tint = StudioColors.TextDim,
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                "Ads Studio · всё считается на телефоне",
+                style = MaterialTheme.typography.bodySmall,
+                color = StudioColors.TextDim
+            )
+        }
+    }
 }

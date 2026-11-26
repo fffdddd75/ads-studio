@@ -11,8 +11,8 @@ android {
         applicationId = "com.adsstudio"
         minSdk = 29
         targetSdk = 34
-        versionCode = 4
-        versionName = "0.3.0"
+        versionCode = 5
+        versionName = "0.3.1"
 
         ndk {
             abiFilters.add("arm64-v8a")
@@ -80,6 +80,8 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-core")
+    implementation("androidx.compose.animation:animation")
     debugImplementation("androidx.compose.ui:ui-tooling")
 
     implementation("androidx.media3:media3-exoplayer:1.4.1")

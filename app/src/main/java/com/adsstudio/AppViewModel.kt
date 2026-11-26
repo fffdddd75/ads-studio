@@ -40,6 +40,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     transcript = emptyList(),
                     clips = emptyList(),
                     output = null,
+                    outputTitle = null,
+                    exportingClipStart = null,
                     error = null,
                     notice = null,
                     busy = "Читаю видео…",
@@ -72,6 +74,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     progress = null,
                     error = null,
                     output = null,
+                    outputTitle = null,
+                    exportingClipStart = null,
                     notice = null
                 )
             }
@@ -188,13 +192,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
             adBitmap = bitmap
-            _state.update { it.copy(adSet = true) }
+            _state.update { it.copy(adSet = true, adPreview = bitmap) }
         }
     }
 
     fun clearAd() {
         adBitmap = null
-        _state.update { it.copy(adSet = false) }
+        _state.update { it.copy(adSet = false, adPreview = null) }
     }
 
     fun setRatio(ratio: OutputRatio) {
@@ -230,7 +234,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             _state.update {
-                it.copy(busy = "Рендерю клип…", progress = 0f, error = null, output = null)
+                it.copy(
+                    busy = "Рендерю клип…",
+                    progress = 0f,
+                    error = null,
+                    output = null,
+                    outputTitle = null,
+                    exportingClipStart = clip.startMs
+                )
             }
 
             try {
@@ -259,12 +270,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 outFile.delete()
 
-                _state.update { it.copy(busy = null, progress = null, output = galleryUri) }
+                _state.update {
+                    it.copy(
+                        busy = null,
+                        progress = null,
+                        output = galleryUri,
+                        outputTitle = clip.title,
+                        exportingClipStart = null
+                    )
+                }
             } catch (error: Exception) {
                 _state.update {
                     it.copy(
                         busy = null,
                         progress = null,
+                        exportingClipStart = null,
                         error = error.message ?: "Ошибка рендера"
                     )
                 }
