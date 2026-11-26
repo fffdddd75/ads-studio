@@ -509,8 +509,10 @@ fun NeuralGlyph(modifier: Modifier = Modifier) {
 @Composable
 fun AiCard(
     enabled: Boolean,
-    ready: Boolean,
+    vlmEnabled: Boolean,
+    vlmReady: Boolean,
     onToggle: (Boolean) -> Unit,
+    onVlmToggle: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
     interactive: Boolean = true
 ) {
@@ -536,19 +538,33 @@ fun AiCard(
                         Modifier
                             .size(6.dp)
                             .clip(CircleShape)
-                            .background(if (ready) StudioColors.Green else StudioColors.TextDim)
+                            .background(
+                                if (vlmEnabled) {
+                                    if (vlmReady) StudioColors.Green else StudioColors.Violet
+                                } else {
+                                    if (enabled) StudioColors.Green else StudioColors.TextDim
+                                }
+                            )
                     )
                 }
                 Spacer(Modifier.height(3.dp))
                 Text(
-                    if (ready) "Qwen 2.5 · 0.5B · модель скачана"
-                    else "Qwen 2.5 · 0.5B · 520 МБ скачается один раз",
+                    when {
+                        vlmEnabled && vlmReady -> "Qwen2.5-VL · 3B · модель скачана"
+                        vlmEnabled -> "Qwen2.5-VL · 3B · ${VlmModelManager.TOTAL_LABEL} скачается один раз"
+                        enabled -> "Qwen 2.5 · 0.5B · быстрый режим"
+                        else -> "Выключена · нарезка по эвристике"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = StudioColors.TextMuted
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    "Выбирает 5 сильных моментов по смыслу и движению в кадре.",
+                    if (vlmEnabled) {
+                        "Смотрит кадры и выбирает 5 сильных моментов. Экспериментально."
+                    } else {
+                        "Выбирает 5 сильных моментов по смыслу и движению в кадре."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = StudioColors.TextDim
                 )
@@ -565,6 +581,93 @@ fun AiCard(
                     uncheckedTrackColor = StudioColors.SurfaceHigh,
                     uncheckedBorderColor = StudioColors.Border
                 )
+            )
+        }
+
+        Spacer(Modifier.height(14.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            ModelChip(
+                title = "Быстрая",
+                badge = "0.5B · 520 МБ",
+                selected = !vlmEnabled,
+                enabled = interactive && enabled,
+                onClick = { onVlmToggle(false) },
+                modifier = Modifier.weight(1f)
+            )
+            ModelChip(
+                title = "Видео-ИИ",
+                badge = "3B · ${VlmModelManager.TOTAL_LABEL}",
+                selected = vlmEnabled,
+                enabled = interactive && enabled,
+                onClick = { onVlmToggle(true) },
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ModelChip(
+    title: String,
+    badge: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val shape = RoundedCornerShape(12.dp)
+    val borderColor by animateColorAsState(
+        targetValue = if (selected) StudioColors.Cyan.copy(alpha = 0.65f)
+        else StudioColors.BorderSoft,
+        animationSpec = tween(180),
+        label = "modelChipBorder"
+    )
+    val background by animateColorAsState(
+        targetValue = if (selected) StudioColors.Cyan.copy(alpha = 0.10f)
+        else StudioColors.SurfaceHigh.copy(alpha = 0.45f),
+        animationSpec = tween(180),
+        label = "modelChipBg"
+    )
+    Row(
+        modifier = modifier
+            .clip(shape)
+            .background(background)
+            .border(1.dp, borderColor, shape)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            Modifier
+                .size(6.dp)
+                .clip(CircleShape)
+                .background(if (selected) StudioColors.Cyan else StudioColors.TextDim)
+        )
+        Spacer(Modifier.width(7.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (enabled) StudioColors.Text else StudioColors.TextDim,
+                maxLines = 1
+            )
+            Text(
+                badge,
+                style = StudioType.mono,
+                color = if (selected) StudioColors.Cyan else StudioColors.TextDim,
+                maxLines = 1
+            )
+        }
+        if (selected) {
+            Icon(
+                imageVector = Icons.Rounded.Check,
+                contentDescription = null,
+                tint = StudioColors.Cyan,
+                modifier = Modifier.size(14.dp)
             )
         }
     }

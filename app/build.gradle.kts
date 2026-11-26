@@ -11,8 +11,8 @@ android {
         applicationId = "com.adsstudio"
         minSdk = 29
         targetSdk = 34
-        versionCode = 5
-        versionName = "0.3.1"
+        versionCode = 6
+        versionName = "0.4.0"
 
         ndk {
             abiFilters.add("arm64-v8a")
@@ -60,6 +60,9 @@ android {
     }
 
     packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
         resources.excludes += setOf(
             "/META-INF/{AL2.0,LGPL2.1}",
             "META-INF/DEPENDENCIES",
