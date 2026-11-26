@@ -80,7 +80,11 @@ object ClipExporter {
             val progressJob = launch {
                 val holder = androidx.media3.transformer.ProgressHolder()
                 while (isActive) {
-                    if (transformer.getProgress(holder)) onProgress(holder.progress)
+                    if (transformer.getProgress(holder) ==
+                        androidx.media3.transformer.Transformer.PROGRESS_STATE_AVAILABLE
+                    ) {
+                        onProgress(holder.progress / 100f)
+                    }
                     kotlinx.coroutines.delay(300)
                 }
             }
