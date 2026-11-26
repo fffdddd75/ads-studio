@@ -27,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -134,6 +135,32 @@ fun AdsStudioApp(vm: AppViewModel = viewModel()) {
                         }
                     }
 
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Нейросеть выбирает клипы",
+                                style = MaterialTheme.typography.labelLarge
+                            )
+                            Text(
+                                if (state.llmReady) {
+                                    "Qwen2.5-0.5B · модель скачана"
+                                } else {
+                                    "Qwen2.5-0.5B · ~520 МБ, скачается один раз"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Switch(
+                            checked = state.llmEnabled,
+                            onCheckedChange = vm::setLlmEnabled,
+                            enabled = state.busy == null
+                        )
+                    }
+
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = {
                             videoPicker.launch(
@@ -197,6 +224,25 @@ fun AdsStudioApp(vm: AppViewModel = viewModel()) {
                                 } else {
                                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                                 }
+                            }
+                        }
+                    }
+
+                    state.notice?.let { notice ->
+                        Card(
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer
+                            )
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    notice,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                TextButton(onClick = vm::dismissNotice) { Text("Ок") }
                             }
                         }
                     }

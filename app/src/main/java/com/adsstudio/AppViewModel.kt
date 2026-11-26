@@ -1,6 +1,7 @@
 package com.adsstudio
 
 import android.app.Application
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -17,7 +18,14 @@ import java.io.File
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val _state = MutableStateFlow(UiState())
+    private val prefs = application.getSharedPreferences("ads_studio", Context.MODE_PRIVATE)
+    private val llmModels = LlmModelManager(application)
+    private val _state = MutableStateFlow(
+        UiState(
+            llmEnabled = prefs.getBoolean("llm_enabled", true),
+            llmReady = llmModels.isReady()
+        )
+    )
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private val models = ModelManager(application)
@@ -33,6 +41,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     clips = emptyList(),
                     output = null,
                     error = null,
+                    notice = null,
                     busy = "Читаю видео…",
                     progress = null
                 )
@@ -62,7 +71,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     busy = "Готовлю модель (~45 МБ при первом запуске)…",
                     progress = null,
                     error = null,
-                    output = null
+                    output = null,
+                    notice = null
                 )
             }
 
@@ -87,11 +97,71 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 wav.delete()
 
-                val clips = ClipPicker.pick(utterances)
+                val candidates = ClipPicker.candidates(utterances, 10)
+                var clips = ClipPicker.pickFromCandidates(candidates, 5)
+                var notice: String? = null
+                var llmReady = llmModels.isReady()
+
+                if (_state.value.llmEnabled && candidates.size >= 3) {
+                    try {
+                        _state.update {
+                            it.copy(
+                                busy = if (llmReady) {
+                                    "Загружаю нейросеть…"
+                                } else {
+                                    "Скачиваю нейросеть (~520 МБ)…"
+                                },
+                                progress = null
+                            )
+                        }
+
+                        val modelPath = llmModels.ensure { value ->
+                            _state.update { it.copy(progress = value.takeIf { p -> p >= 0f }) }
+                        }
+                        llmReady = true
+
+                        _state.update {
+                            it.copy(
+                                llmReady = true,
+                                busy = "Смотрю кадры и выбираю моменты…",
+                                progress = null
+                            )
+                        }
+
+                        LocalLlm(app).use { llm ->
+                            withContext(Dispatchers.IO) { llm.load(modelPath) }
+
+                            val hints: Map<Int, String> = withContext(Dispatchers.IO) {
+                                runCatching {
+                                    VisualHints.analyze(app, uri, candidates)
+                                }.getOrDefault(emptyMap())
+                            }
+
+                            val prompt = LlmClipSelector.prompt(candidates, 5, hints)
+                            val response = withContext(Dispatchers.Default) {
+                                llm.generate(prompt)
+                            }
+                            val indices = LlmClipSelector.parse(response, candidates.size, 5)
+                            if (indices.isNotEmpty()) {
+                                val selected = indices.mapNotNull { candidates.getOrNull(it - 1) }
+                                clips = ClipPicker.fillSelection(selected, candidates, 5)
+                            } else {
+                                notice = "Нейросеть не ответила номерами — выбрал по эвристике."
+                            }
+                        }
+                    } catch (error: Throwable) {
+                        if (error is kotlinx.coroutines.CancellationException) throw error
+                        notice = "Нейросеть не справилась: ${error.message ?: "ошибка"}. " +
+                            "Выбрал по эвристике."
+                    }
+                }
+
                 _state.update {
                     it.copy(
                         transcript = utterances,
                         clips = clips,
+                        llmReady = llmReady,
+                        notice = notice,
                         busy = null,
                         progress = null
                     )
@@ -129,6 +199,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setRatio(ratio: OutputRatio) {
         _state.update { it.copy(ratio = ratio) }
+    }
+
+    fun setLlmEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean("llm_enabled", enabled).apply()
+        _state.update { it.copy(llmEnabled = enabled) }
+    }
+
+    fun dismissNotice() {
+        _state.update { it.copy(notice = null) }
     }
 
     fun renameClip(clip: SuggestedClip, title: String) {

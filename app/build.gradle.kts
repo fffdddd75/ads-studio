@@ -11,8 +11,8 @@ android {
         applicationId = "com.adsstudio"
         minSdk = 29
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 4
+        versionName = "0.3.0"
 
         ndk {
             abiFilters.add("arm64-v8a")
@@ -89,5 +89,6 @@ dependencies {
     implementation("androidx.media3:media3-common:1.4.1")
 
     implementation("com.alphacephei:vosk-android:0.3.47")
+    implementation("com.google.mediapipe:tasks-genai:0.10.27")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 }

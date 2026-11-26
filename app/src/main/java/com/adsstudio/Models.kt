@@ -28,9 +28,12 @@ data class UiState(
     val transcript: List<Utterance> = emptyList(),
     val clips: List<SuggestedClip> = emptyList(),
     val ratio: OutputRatio = OutputRatio.RATIO_16_9,
+    val llmEnabled: Boolean = true,
+    val llmReady: Boolean = false,
     val adSet: Boolean = false,
     val busy: String? = null,
     val progress: Float? = null,
     val output: Uri? = null,
-    val error: String? = null
+    val error: String? = null,
+    val notice: String? = null
 )
