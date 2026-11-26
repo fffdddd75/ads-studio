@@ -8,13 +8,10 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
- * Настоящий рендер клипа: кроп 9:16, опциональный рекламный оверлей,
+ * Настоящий рендер клипа: кроп под выбранный формат, опциональный рекламный оверлей,
  * аппаратное кодирование H.264/AAC через Media3 Transformer.
  */
 object ClipExporter {
-
-    private const val OUTPUT_WIDTH = 1080
-    private const val OUTPUT_HEIGHT = 1920
 
     suspend fun export(
         context: android.content.Context,
@@ -22,6 +19,8 @@ object ClipExporter {
         startMs: Long,
         endMs: Long,
         ad: Bitmap?,
+        outputWidth: Int,
+        outputHeight: Int,
         outFile: java.io.File,
         onProgress: (Float) -> Unit
     ): java.io.File = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
@@ -40,13 +39,13 @@ object ClipExporter {
 
         val videoEffects = mutableListOf<androidx.media3.common.Effect>()
         videoEffects += androidx.media3.effect.Presentation.createForWidthAndHeight(
-            OUTPUT_WIDTH,
-            OUTPUT_HEIGHT,
+            outputWidth,
+            outputHeight,
             androidx.media3.effect.Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
         )
 
         if (ad != null) {
-            val scale = (OUTPUT_WIDTH * 0.26f) / ad.width.coerceAtLeast(1)
+            val scale = (outputWidth * 0.26f) / ad.width.coerceAtLeast(1)
             val settings = androidx.media3.effect.OverlaySettings.Builder()
                 .setScale(scale, scale)
                 .setAlphaScale(0.9f)

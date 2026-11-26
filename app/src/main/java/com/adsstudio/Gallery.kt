@@ -9,10 +9,16 @@ import java.io.File
 
 object Gallery {
 
-    fun publishVideo(context: Context, file: File, displayName: String): Uri {
+    fun publishVideo(
+        context: Context,
+        file: File,
+        displayName: String,
+        title: String
+    ): Uri {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.Video.Media.DISPLAY_NAME, displayName)
+            put(MediaStore.Video.Media.TITLE, title)
             put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")
             put(
                 MediaStore.Video.Media.RELATIVE_PATH,

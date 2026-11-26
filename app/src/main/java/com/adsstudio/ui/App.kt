@@ -1,7 +1,9 @@
 package com.adsstudio
 
+import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,9 +20,11 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,8 +34,11 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -50,6 +57,16 @@ fun AdsStudioApp(vm: AppViewModel = viewModel()) {
     AdsStudioTheme {
         val state by vm.state.collectAsStateWithLifecycle()
         val context = LocalContext.current
+
+        val activity = context as? Activity
+        DisposableEffect(state.busy) {
+            if (state.busy != null) {
+                activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+            onDispose {
+                activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
+        }
 
         val videoPicker = rememberLauncherForActivityResult(
             ActivityResultContracts.PickVisualMedia()
@@ -104,6 +121,17 @@ fun AdsStudioApp(vm: AppViewModel = viewModel()) {
                         )
                     }
 
+                    Text("Формат клипа", style = MaterialTheme.typography.labelLarge)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutputRatio.values().forEach { ratio ->
+                            FilterChip(
+                                selected = state.ratio == ratio,
+                                onClick = { vm.setRatio(ratio) },
+                                label = { Text(ratio.label) }
+                            )
+                        }
+                    }
+
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = {
                             videoPicker.launch(
@@ -142,12 +170,22 @@ fun AdsStudioApp(vm: AppViewModel = viewModel()) {
                     }
 
                     state.busy?.let { busy ->
+                        var elapsed by remember { mutableStateOf(0) }
+                        LaunchedEffect(busy) {
+                            elapsed = 0
+                            while (true) {
+                                kotlinx.coroutines.delay(1000)
+                                elapsed++
+                            }
+                        }
                         Card {
                             Column(
                                 modifier = Modifier.padding(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                Text(busy)
+                                Text(
+                                    "$busy  ${elapsed / 60}:${(elapsed % 60).toString().padStart(2, '0')}"
+                                )
                                 val progress = state.progress
                                 if (progress != null) {
                                     LinearProgressIndicator(
@@ -226,6 +264,8 @@ fun AdsStudioApp(vm: AppViewModel = viewModel()) {
                             ClipCard(
                                 clip = clip,
                                 enabled = state.busy == null,
+                                ratioLabel = state.ratio.label,
+                                onRename = { title -> vm.renameClip(clip, title) },
                                 onExport = { vm.export(clip) }
                             )
                         }
@@ -278,16 +318,29 @@ private fun VideoPreview(uri: Uri) {
 }
 
 @Composable
-private fun ClipCard(clip: SuggestedClip, enabled: Boolean, onExport: () -> Unit) {
+private fun ClipCard(
+    clip: SuggestedClip,
+    enabled: Boolean,
+    ratioLabel: String,
+    onRename: (String) -> Unit,
+    onExport: () -> Unit
+) {
     Card {
         Column(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            OutlinedTextField(
+                value = clip.title,
+                onValueChange = onRename,
+                label = { Text("Название") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
             Text(
-                clip.title,
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.SemiBold
+                "Это название станет именем файла",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
                 "${formatDuration(clip.startMs)} – ${formatDuration(clip.endMs)}",
@@ -299,7 +352,7 @@ private fun ClipCard(clip: SuggestedClip, enabled: Boolean, onExport: () -> Unit
                 maxLines = 4
             )
             Button(onClick = onExport, enabled = enabled) {
-                Text("Экспорт 9:16")
+                Text("Экспорт $ratioLabel")
             }
         }
     }

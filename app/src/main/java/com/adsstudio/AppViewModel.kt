@@ -59,7 +59,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _state.update {
                 it.copy(
-                    busy = "Проверяю модель…",
+                    busy = "Готовлю модель (~45 МБ при первом запуске)…",
                     progress = null,
                     error = null,
                     output = null
@@ -127,6 +127,24 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(adSet = false) }
     }
 
+    fun setRatio(ratio: OutputRatio) {
+        _state.update { it.copy(ratio = ratio) }
+    }
+
+    fun renameClip(clip: SuggestedClip, title: String) {
+        _state.update { state ->
+            state.copy(
+                clips = state.clips.map { item ->
+                    if (item.startMs == clip.startMs && item.endMs == clip.endMs) {
+                        item.copy(title = title)
+                    } else {
+                        item
+                    }
+                }
+            )
+        }
+    }
+
     fun export(clip: SuggestedClip) {
         val uri = _state.value.videoUri ?: return
         val app = getApplication<Application>()
@@ -137,6 +155,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             try {
+                val ratio = _state.value.ratio
                 val outFile = File(app.cacheDir, "clip_${clip.startMs}.mp4")
                 ClipExporter.export(
                     context = app,
@@ -144,15 +163,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     startMs = clip.startMs,
                     endMs = clip.endMs,
                     ad = adBitmap,
+                    outputWidth = ratio.width,
+                    outputHeight = ratio.height,
                     outFile = outFile,
                     onProgress = { value -> _state.update { it.copy(progress = value) } }
                 )
 
+                val safeTitle = sanitizeFileName(clip.title)
                 val galleryUri = withContext(Dispatchers.IO) {
                     Gallery.publishVideo(
                         app,
                         outFile,
-                        "ads_${System.currentTimeMillis()}.mp4"
+                        "$safeTitle.mp4",
+                        clip.title
                     )
                 }
                 outFile.delete()
@@ -173,6 +196,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun dismissError() {
         _state.update { it.copy(error = null) }
     }
+
+    private fun sanitizeFileName(name: String): String =
+        name.replace(Regex("""[\\/:*?"<>|\n\r]"""), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .take(60)
+            .ifBlank { "clip" }
 
     private fun decodeSampled(uri: Uri, maxSide: Int): Bitmap? {
         val resolver = getApplication<Application>().contentResolver

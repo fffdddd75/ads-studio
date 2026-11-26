@@ -61,13 +61,24 @@ object ClipPicker {
         return chosen.sortedBy { it.startMs }
     }
 
+    private val leadingFillers = setOf(
+        "вот", "ну", "это", "а", "и", "так", "да", "короче", "значит", "там", "тут"
+    )
+
     private fun titleOf(text: String): String {
         val words = text
             .replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
             .split(Regex("\\s+"))
             .filter { it.isNotBlank() }
-            .take(7)
-        val title = words.joinToString(" ")
+
+        val start = words.indexOfFirst { it.lowercase() !in leadingFillers }
+            .let { if (it < 0) 0 else it }
+
+        var title = words.drop(start).take(9).joinToString(" ")
+        if (title.length > 60) {
+            val cut = title.take(60)
+            title = cut.substringBeforeLast(" ").ifBlank { cut }
+        }
         return title.replaceFirstChar { it.uppercase() }.ifBlank { "Клип" }
     }
 }
