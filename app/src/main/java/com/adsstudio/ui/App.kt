@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -39,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -325,22 +327,33 @@ private fun ClipCard(
     onRename: (String) -> Unit,
     onExport: () -> Unit
 ) {
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember(clip.title) { mutableStateOf(clip.title) }
+
     Card {
         Column(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            OutlinedTextField(
-                value = clip.title,
-                onValueChange = onRename,
-                label = { Text("Название") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    clip.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = {
+                    draft = clip.title
+                    editing = true
+                }) {
+                    Text("Изменить")
+                }
+            }
             Text(
-                "Это название станет именем файла",
+                "Имя файла: ${clip.title}.mp4",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
             )
             Text(
                 "${formatDuration(clip.startMs)} – ${formatDuration(clip.endMs)}",
@@ -355,6 +368,34 @@ private fun ClipCard(
                 Text("Экспорт $ratioLabel")
             }
         }
+    }
+
+    if (editing) {
+        AlertDialog(
+            onDismissRequest = { editing = false },
+            title = { Text("Название клипа") },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    label = { Text("Название") },
+                    singleLine = true
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onRename(draft)
+                    editing = false
+                }) {
+                    Text("Сохранить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editing = false }) {
+                    Text("Отмена")
+                }
+            }
+        )
     }
 }
 
