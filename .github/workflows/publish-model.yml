@@ -1,0 +1,27 @@
+name: Publish local LLM
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Qwen2.5-0.5B q8
+        run: |
+          curl -L --retry 5 --retry-delay 5 \
+            -o qwen2.5-0.5b-instruct-q8.task \
+            "https://huggingface.co/litert-community/Qwen2.5-0.5B-Instruct/resolve/main/Qwen2.5-0.5B-Instruct_multi-prefill-seq_q8_ekv1280.task"
+          ls -lh qwen2.5-0.5b-instruct-q8.task
+          sha256sum qwen2.5-0.5b-instruct-q8.task
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: llm-qwen-0.5b-v1
+          name: Local LLM model (Qwen2.5-0.5B q8)
+          body: On-device model for Ads Studio clip selection. Downloaded once by the app.
+          files: qwen2.5-0.5b-instruct-q8.task
