@@ -343,23 +343,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val indices = LlmClipSelector.parse(response, pool.size, 5)
             if (indices.isEmpty()) {
                 onNotice("Нейросеть не ответила номерами — выбрал по смыслу и звуку.")
-                return@use ClipPicker.pickFromCandidates(candidates, 5)
-            }
+                ClipPicker.pickFromCandidates(candidates, 5)
+            } else {
+                val llmSelected = indices.mapNotNull { pool.getOrNull(it - 1) }
+                val heuristic = ClipPicker.pickFromCandidates(candidates, 5)
+                val combined =
+                    (llmSelected.map { it to (it.score + 12f) } +
+                        heuristic.map { it to it.score })
+                        .sortedByDescending { it.second }
+                        .map { it.first }
+                        .distinctBy { it.startMs to it.endMs }
 
-            val llmSelected = indices.mapNotNull { pool.getOrNull(it - 1) }
-            val heuristic = ClipPicker.pickFromCandidates(candidates, 5)
-            val combined = (llmSelected.map { it to (it.score + 12f) } + heuristic.map { it to it.score })
-                .sortedByDescending { it.second }
-                .map { it.first }
-                .distinctBy { it.startMs to it.endMs }
-
-            val selected = mutableListOf<SuggestedClip>()
-            for (clip in combined) {
-                if (selected.size >= 5) break
-                if (selected.any { it.startMs < clip.endMs && clip.startMs < it.endMs }) continue
-                selected += clip
+                val selected = mutableListOf<SuggestedClip>()
+                for (clip in combined) {
+                    if (selected.size >= 5) break
+                    if (selected.any { it.startMs < clip.endMs && clip.startMs < it.endMs }) continue
+                    selected += clip
+                }
+                ClipPicker.fillSelection(selected, candidates, 5)
             }
-            ClipPicker.fillSelection(selected, candidates, 5)
         }
     }
 

@@ -86,7 +86,7 @@ object AudioFeatures {
         info: WavInfo,
         clip: SuggestedClip
     ): AudioHint? {
-        val startSample = clip.startMs.coerceAtLeast(0) * info.sampleRate / 1000
+        val startSample = clip.startMs.coerceAtLeast(0L) * info.sampleRate / 1000
         val endSample = clip.endMs.coerceAtLeast(clip.startMs) * info.sampleRate / 1000
         val startByte = info.dataOffset + startSample * info.bytesPerFrame
         val endByte = (info.dataOffset + endSample * info.bytesPerFrame)
@@ -144,7 +144,7 @@ object AudioFeatures {
         val rms = sqrt(sumSquares / samples)
         val db = 20.0 * log10(rms + 1e-9)
         val energy = ((db + 60.0) / 60.0).coerceIn(0.0, 1.0).toFloat()
-        val durationSec = (clip.endMs - clip.startMs).coerceAtLeast(1) / 1000.0
+        val durationSec = (clip.endMs - clip.startMs).coerceAtLeast(1L) / 1000.0
         val words = clip.text.split(Regex("\\s+")).count { it.isNotBlank() }
         val speechRate = (words / durationSec).toFloat()
 

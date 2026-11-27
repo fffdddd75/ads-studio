@@ -319,7 +319,7 @@ object ClipPicker {
         val lower = text.lowercase()
         val words = cleanWords(text)
 
-        val hookHits = hooks.count { lower.contains(it) }
+        val hookHits = words.count { word -> hooks.any { word.startsWith(it) } }
         val eventHits = eventWords.count { lower.contains(it) }
         val valueHits = valueWords.count { lower.contains(it) }
         val emotionHits = emotionWords.count { lower.contains(it) }
