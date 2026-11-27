@@ -26,12 +26,12 @@ object VlmClipSelector {
     private const val HEADER_H = 44
     private const val COLS = 3
     private const val ROWS = 2
-    private const val CELL_W = SHEET_W / COLS          // 426
-    private const val CELL_H = (SHEET_H - HEADER_H) / ROWS  // 338
+    private const val CELL_W = SHEET_W / COLS          // 341
+    private const val CELL_H = (SHEET_H - HEADER_H) / ROWS  // 266
     private const val PAD = 6
     private const val LABEL_H = 44
-    private const val FRAME_W = CELL_W - PAD * 2       // 414
-    private const val FRAME_H = CELL_H - LABEL_H - PAD // 288
+    private const val FRAME_W = CELL_W - PAD * 2       // 329
+    private const val FRAME_H = CELL_H - LABEL_H - PAD // 216
 
     // Два момента на фрагмент: начало и конец.
     private val moments = listOf(
@@ -64,11 +64,11 @@ object VlmClipSelector {
                 parts += VlmPart(imageBase64 = encode(sheet))
             }
             parts += VlmPart(
-                text = "Ответь только номерами через запятую, от лучшего к худшему. " +
-                    "Без объяснений. Например: 2, 5, 1, 4, 3."
+                text = "Ответь только 5 номеров через запятую, от лучшего к худшему. " +
+                    "Без слов."
             )
             onFramesReady()
-            val response = server.rank(parts, maxTokens = 96)
+            val response = server.rank(parts, maxTokens = 24)
             return parse(response, candidates.size, maxClips)
         } finally {
             sheets.forEach { it.recycle() }
@@ -76,18 +76,15 @@ object VlmClipSelector {
     }
 
     private fun intro(count: Int, maxClips: Int): String =
-        "Ниже два коллажа одного видео, по ${count.coerceAtMost(COLS * ROWS)} фрагментов " +
-            "на каждом. Первый коллаж — начало фрагментов, второй — конец. Номера " +
-            "фрагментов на обоих коллажах совпадают, в каждой ячейке подписаны номер и таймкод.\n" +
-            "Выбери $maxClips самых интересных для коротких видео (Shorts/Reels): " +
-            "действие, эмоция, конфликт, интрига, польза, неожиданность.\n" +
-            "Избегай: статичная говорящая голова, приветствие, вода, реклама, " +
-            "перечисление без мысли."
+        "Два коллажа: начало и конец ${count.coerceAtMost(COLS * ROWS)} фрагментов. " +
+            "Номера и таймкоды подписаны.\n" +
+            "Выбери $maxClips самых живых для Shorts: действие, эмоция, конфликт, польза. " +
+            "Избегай говорящей головы, приветствий и воды."
 
     private fun candidatesText(candidates: List<SuggestedClip>): String {
         return candidates.take(COLS * ROWS).mapIndexed { index, clip ->
             "Фрагмент ${index + 1} (${time(clip.startMs)}–${time(clip.endMs)}): " +
-                clip.text.replace(Regex("\\s+"), " ").take(220)
+                clip.text.replace(Regex("\\s+"), " ").take(60)
         }.joinToString("\n")
     }
 

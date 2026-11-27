@@ -55,13 +55,13 @@ class VlmServer(private val context: Context) : Closeable {
             "--mmproj", mmprojPath,
             "-c", "2048",
             "-np", "1",
-            "-b", "256",
-            "-ub", "128",
+            "-b", "512",
+            "-ub", "512",
             "--host", "127.0.0.1",
             "--port", port.toString(),
             "--no-webui",
             "--jinja",
-            "--image-max-tokens", "256",
+            "--image-max-tokens", "96",
             "--no-warmup",
             "--log-colors", "off"
         ) + cpuAffinityArgs()
