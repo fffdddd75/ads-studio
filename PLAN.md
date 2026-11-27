@@ -127,8 +127,9 @@ GGML_BACKEND_PATH=<nativeLibraryDir>
 HOME=<filesDir>   TMPDIR=<cacheDir>   (LD_PRELOAD удаляется)
 ```
 
-Флаги: `-m <model> --mmproj <mmproj> -c 2048 -np 1 -t 4 --cpu-mask <big cores> --host 127.0.0.1
---port 18081 --no-webui --jinja --image-max-tokens 128 --no-warmup --log-colors off`.
+Флаги: `-m <model> --mmproj <mmproj> -c 2048 -np 1 -b 256 -ub 128 -t <big cores>
+--cpu-mask <mask> --host 127.0.0.1 --port 18081 --no-webui --jinja
+--image-max-tokens 256 --no-warmup --log-colors off`.
 Ждём `/health` до 240 с. Лог — `filesDir/vlm-server.log` (в ошибку попадает хвост).
 
 Сервер **переиспользуется** между анализами: инстанс живёт в `AppViewModel.vlmServer`,
@@ -271,7 +272,7 @@ ID джобы берётся из
 ## 10. Следующие задачи (по приоритету)
 
 1. **Замер и скорость VLM (0.4.2).** Сделано: два коллажа по 6 кадров, `-c 2048`,
-   `--image-max-tokens 128`, `max_tokens=32`, таймаут 180 с, ASR вынесен с главного потока,
+   `--image-max-tokens 256`, `max_tokens=32`, таймаут 180 с, ASR вынесен с главного потока,
    привязка потоков к большим ядрам, остановка сервера через 2 мин простоя, кнопка «Отменить»
    и показ времени по этапам. Причина 8+ минут на замере: на телефоне одновременно висел
    второй llama-server (порт 8081) — два экземпляра модели не влезали в 8 ГБ. После убийства
