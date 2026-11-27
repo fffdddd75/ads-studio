@@ -61,7 +61,6 @@ class VlmServer(private val context: Context) : Closeable {
             "--no-webui",
             "--jinja",
             "--image-max-tokens", "384",
-            "--log-file", log.absolutePath,
             "--log-colors", "off"
         )
 
@@ -69,6 +68,7 @@ class VlmServer(private val context: Context) : Closeable {
         builder.directory(context.filesDir)
         builder.redirectErrorStream(true)
         builder.redirectOutput(ProcessBuilder.Redirect.appendTo(log))
+        builder.environment().remove("LD_PRELOAD")
         builder.environment()["LD_LIBRARY_PATH"] = nativeDir
         builder.environment()["GGML_BACKEND_PATH"] = nativeDir
         builder.environment()["HOME"] = context.filesDir.absolutePath

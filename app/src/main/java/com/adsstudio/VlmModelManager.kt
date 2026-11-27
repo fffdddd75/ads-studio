@@ -178,7 +178,6 @@ class VlmModelManager(private val context: Context) {
 
     companion object {
         const val TOTAL_LABEL = "2,6 ГБ"
-        const val TOTAL_BYTES = MODEL_BYTES + MMPROJ_BYTES
 
         private const val MODEL_FILE = "qwen2.5-vl-3b-q4_k_m.gguf"
         private const val MMPROJ_FILE = "qwen2.5-vl-3b-mmproj-q8_0.gguf"
@@ -186,6 +185,7 @@ class VlmModelManager(private val context: Context) {
         private const val MMPROJ_URL_NAME = "mmproj-Qwen2.5-VL-3B-Instruct-Q8_0.gguf"
         private const val MODEL_BYTES = 1_929_901_056L
         private const val MMPROJ_BYTES = 844_757_728L
+        const val TOTAL_BYTES = MODEL_BYTES + MMPROJ_BYTES
 
         private val BASE_URLS = listOf(
             "https://hf-mirror.com/ggml-org/Qwen2.5-VL-3B-Instruct-GGUF/resolve/main/",
