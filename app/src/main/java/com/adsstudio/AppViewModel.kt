@@ -33,6 +33,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val models = ModelManager(application)
     private var adBitmap: Bitmap? = null
+    private var vlmServer: VlmServer? = null
 
     fun onVideoPicked(uri: Uri) {
         viewModelScope.launch {
@@ -133,7 +134,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 it.copy(vlmReady = true, busy = "Запускаю видео-ИИ…", progress = null)
                             }
 
-                            VlmServer(app).use { server ->
+                            val server = vlmServer ?: VlmServer(app).also { vlmServer = it }
+                            run {
                                 server.start(paths.first, paths.second) { status ->
                                     _state.update { it.copy(busy = status) }
                                 }
@@ -428,5 +430,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return resolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, options)
         }
+    }
+
+    override fun onCleared() {
+        vlmServer?.close()
+        vlmServer = null
+        super.onCleared()
     }
 }
