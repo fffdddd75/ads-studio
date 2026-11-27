@@ -465,6 +465,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun cancelAnalysis() {
         analysisJob?.cancel()
         analysisJob = null
+        vlmIdleJob?.cancel()
         vlmServer?.stop()
         _state.update {
             it.copy(busy = null, progress = null, notice = "Остановлено")

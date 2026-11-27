@@ -157,6 +157,10 @@ class VlmServer(private val context: Context) : Closeable {
                 .getJSONObject(0)
                 .getJSONObject("message")
                 .optString("content", "")
+        } catch (timeout: java.net.SocketTimeoutException) {
+            error("слишком долго думал")
+        } catch (connect: java.net.ConnectException) {
+            error("не отвечает")
         } finally {
             connection.disconnect()
         }
