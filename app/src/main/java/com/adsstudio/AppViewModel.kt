@@ -45,7 +45,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            VlmServer.cleanupOrphan(application)
+            VlmServer.cleanupOrphan(application, scan = false)
         }
     }
 

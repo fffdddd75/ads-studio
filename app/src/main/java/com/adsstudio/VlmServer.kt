@@ -297,7 +297,7 @@ class VlmServer(private val context: Context) : Closeable {
          * Убивает llama-server, оставшийся от прошлого процесса приложения
          * (обновление/force-stop). Иначе он держит порт и 2,8 ГБ памяти.
          */
-        fun cleanupOrphan(context: Context, keepPid: Long? = null) {
+        fun cleanupOrphan(context: Context, keepPid: Long? = null, scan: Boolean = true) {
             val killed = mutableSetOf<Long>()
 
             fun kill(pid: Long) {
@@ -319,9 +319,11 @@ class VlmServer(private val context: Context) : Closeable {
             if (pid != null) kill(pid)
 
             // Страховка для версий без PID-файла: ищем свои llama-server в /proc.
-            File("/proc").listFiles()?.forEach { dir ->
-                val candidate = dir.name.toIntOrNull() ?: return@forEach
-                kill(candidate.toLong())
+            if (scan) {
+                File("/proc").listFiles()?.forEach { dir ->
+                    val candidate = dir.name.toIntOrNull() ?: return@forEach
+                    kill(candidate.toLong())
+                }
             }
         }
     }
