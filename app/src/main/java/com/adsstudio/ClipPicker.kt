@@ -1,7 +1,7 @@
 package com.adsstudio
 
 import kotlin.math.abs
-import kotlin.math.log
+import kotlin.math.ln
 
 /**
  * Кандидаты для нарезки. Границы привязаны к паузам в речи,
@@ -171,7 +171,7 @@ object ClipPicker {
 
         return candidates.mapIndexed { index, clip ->
             val specificity = docs[index].sumOf { word ->
-                log(total / (1.0 + (documentFrequency[word] ?: 0)))
+                ln(total / (1.0 + (documentFrequency[word] ?: 0)))
             }.toFloat()
 
             clip.copy(
