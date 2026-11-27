@@ -39,6 +39,28 @@ object ClipPicker {
         "результат", "сравнил", "сработало", "не сработало", "получилось"
     )
 
+    private val setupWords = listOf(
+        "секрет", "сейчас расскажу", "сейчас покажу", "сейчас будет", "смотри", "слушай",
+        "вот что", "в общем", "короче", "представь", "и тут", "однажды",
+        "как-то", "вопрос", "хочу рассказать", "хочу показать", "была история",
+        "дело было", "всё началось", "все началось", "началось с", "расскажу",
+        "покажу", "объясню", "история такая", "прикол", "фишка", "такое дело",
+        "знаете", "понимаешь", "потом", "дальше", "вот такая"
+    )
+
+    private val payoffWords = listOf(
+        "оказалось", "в итоге", "в конечном итоге", "вот почему", "поэтому", "так вот",
+        "результат", "и тогда", "на самом деле", "секрет в том", "в чем секрет",
+        "в чём секрет", "вот в чем", "вот в чём", "разгадка", "причина",
+        "сработало", "не сработало", "получилось", "врезался", "врезалась",
+        "выскочил", "выскочила", "упал", "упала", "спас", "спасла", "поймал",
+        "поймала", "вот так", "и вот", "вот и всё", "вот и все", "так что",
+        "в результате", "в конце", "смысл в том", "мораль", "вывод",
+        "фишка в том", "прикол в том", "дело в том", "вот такая история",
+        "вот такой", "после этого", "в тот момент", "в этот момент",
+        "выяснилось", "неожиданно", "внезапно", "тогда я", "тогда он", "тогда она"
+    )
+
     private val valueWords = listOf(
         "главное", "важно", "запомни", "никогда", "всегда", "нельзя", "нужно",
         "правильно", "ошибка", "решение", "причина", "смысл", "совет", "лайфхак",
@@ -218,69 +240,111 @@ object ClipPicker {
     private fun buildCandidates(units: List<Unit>, totalDurationMs: Long): List<SuggestedClip> {
         val candidates = mutableListOf<SuggestedClip>()
 
-        for (i in units.indices) {
-            val includePrevious = i > 0 &&
-                startsWithContinuation(units[i].text) &&
-                units[i].startMs - units[i - 1].endMs <= 800
-            val startIndex = if (includePrevious) i - 1 else i
-
-            var endIndex = startIndex
-            var end = units[startIndex].endMs
-            val texts = mutableListOf(units[startIndex].text)
-
-            while (endIndex + 1 < units.size) {
-                val next = units[endIndex + 1]
-                if (next.startMs - end > 800) break
-                if (next.endMs - units[startIndex].startMs > 55_000) break
-                endIndex++
-                end = next.endMs
-                texts += next.text
-                val duration = end - units[startIndex].startMs
-                if (duration >= 18_000 && !endsWithContinuation(next.text)) break
-            }
-
-            val duration = end - units[startIndex].startMs
-            if (duration !in 8_000L..60_000L) continue
-
+        fun add(startIndex: Int, endIndex: Int) {
+            if (startIndex !in units.indices || endIndex !in units.indices || endIndex < startIndex) return
+            val start = units[startIndex].startMs
+            val end = units[endIndex].endMs
+            val duration = end - start
+            if (duration !in 8_000L..60_000L) return
+            val texts = units.subList(startIndex, endIndex + 1).map { it.text }
             val text = texts.joinToString(" ")
-            // Не отдаём в кандидаты чистое вступление в первые 8 секунд.
-            if (units[startIndex].startMs < 8_000 && isIntroOnly(text)) continue
-
+            if (start < 8_000 && isIntroOnly(text)) return
             candidates += SuggestedClip(
-                startMs = units[startIndex].startMs,
+                startMs = start,
                 endMs = end,
                 title = titleOf(texts),
                 text = text,
                 score = scoreText(
                     text = text,
                     duration = duration,
-                    startMs = units[startIndex].startMs,
+                    startMs = start,
                     totalDurationMs = totalDurationMs
                 )
             )
         }
 
-        // Вопрос + ответ — сильный крючок для Shorts, даже если ответ не влез в 18 секунд.
+        for (i in units.indices) {
+            // 1. Обычное окно вперёд: минимум 18 секунд, дальше — пока не закончится мысль.
+            var endIndex = i
+            while (endIndex + 1 < units.size) {
+                val next = units[endIndex + 1]
+                if (next.startMs - units[endIndex].endMs > 1_500) break
+                if (next.endMs - units[i].startMs > 60_000) break
+                val current = units.subList(i, endIndex + 1).joinToString(" ") { it.text }
+                val duration = units[endIndex].endMs - units[i].startMs
+                val shouldExtend = duration < 18_000 ||
+                    needsPayoff(current) ||
+                    endsWithContinuation(current)
+                if (!shouldExtend) break
+                endIndex++
+            }
+            add(i, endIndex)
+
+            // 2. Окно с завязкой: захватываем предыдущую фразу, если в ней вопрос/начало истории.
+            if (i > 0 && units[i].startMs - units[i - 1].endMs <= 3_000 &&
+                (hasSetup(units[i - 1].text) || isQuestion(units[i - 1].text) ||
+                    needsPayoff(units[i - 1].text) || startsWithContinuation(units[i].text))
+            ) {
+                var end = i
+                if (i + 1 < units.size && units[i + 1].startMs - units[i].endMs <= 3_000) {
+                    end = i + 1
+                }
+                add(i - 1, end)
+            }
+
+            // 3. Окно вокруг события: завязка + событие + развязка.
+            if (hasEvent(units[i].text)) {
+                val start = if (i > 0 && units[i].startMs - units[i - 1].endMs <= 3_000 &&
+                    (hasSetup(units[i - 1].text) || isQuestion(units[i - 1].text) ||
+                        startsWithContinuation(units[i].text))
+                ) i - 1 else i
+                var end = i
+                if (i + 1 < units.size && units[i + 1].startMs - units[i].endMs <= 3_000) {
+                    end = i + 1
+                    if (i + 2 < units.size && containsPayoff(units[i + 1].text) &&
+                        units[i + 2].startMs - units[i + 1].endMs <= 1_500
+                    ) {
+                        end = i + 2
+                    }
+                }
+                add(start, end)
+            }
+
+            // 4. История с развязкой: от «секрет/вопрос» до «оказалось/в итоге»,
+            // даже если между ними пауза до 5 секунд.
+            if (needsPayoff(units[i].text) || isQuestion(units[i].text)) {
+                var j = i + 1
+                var last = i
+                while (j < units.size && units[j].endMs - units[i].startMs <= 60_000) {
+                    if (units[j].startMs - units[last].endMs > 5_000) break
+                    last = j
+                    if (containsPayoff(units[j].text)) {
+                        add(i, j)
+                        if (j + 1 < units.size && units[j + 1].startMs - units[j].endMs <= 1_500) {
+                            add(i, j + 1)
+                        }
+                        break
+                    }
+                    if (j - i >= 2) {
+                        add(i, j)
+                        break
+                    }
+                    j++
+                }
+            }
+        }
+
+        // Вопрос + ответ через паузу — тоже законченная история.
         for (i in 0 until units.size - 1) {
-            val question = units[i]
+            if (!isQuestion(units[i].text)) continue
             val answer = units[i + 1]
-            if (!isQuestion(question.text)) continue
-            if (answer.startMs - question.endMs > 900) continue
-            val duration = answer.endMs - question.startMs
-            if (duration !in 8_000L..60_000L) continue
-            val text = question.text + " " + answer.text
-            candidates += SuggestedClip(
-                startMs = question.startMs,
-                endMs = answer.endMs,
-                title = titleOf(listOf(question.text, answer.text)),
-                text = text,
-                score = scoreText(
-                    text = text,
-                    duration = duration,
-                    startMs = question.startMs,
-                    totalDurationMs = totalDurationMs
-                )
-            )
+            if (answer.startMs - units[i].endMs > 4_000) continue
+            add(i, i + 1)
+            if (i + 2 < units.size && containsPayoff(units[i + 2].text) &&
+                units[i + 2].startMs - answer.endMs <= 2_000
+            ) {
+                add(i, i + 2)
+            }
         }
 
         return candidates.distinctBy { it.startMs to it.endMs }
@@ -293,7 +357,7 @@ object ClipPicker {
         for (candidate in candidates.sortedByDescending { it.score }) {
             if (chosen.size >= limit) break
             if (chosen.any { it.startMs < candidate.endMs && candidate.startMs < it.endMs }) continue
-            if (chosen.any { abs(it.startMs - candidate.startMs) < 20_000 }) continue
+            if (chosen.any { abs(it.startMs - candidate.startMs) < 24_000 }) continue
             if (chosen.any { textSimilarity(it.text, candidate.text) >= 0.72 }) continue
             chosen += candidate
         }
@@ -333,6 +397,10 @@ object ClipPicker {
         val numbers = Regex("\\d").findAll(text).count().coerceAtMost(3)
         val fillerCount = words.count { it in fillers }
         val speechRate = if (duration > 0) words.size / (duration / 1000.0) else 0.0
+        val setupHits = setupWords.count { lower.contains(it) }
+        val payoffHits = payoffWords.count { lower.contains(it) }
+        val unresolvedQuestion = if (lower.trimEnd().endsWith("?")) 1 else 0
+        val completeness = payoffHits * 7f - setupHits * 6f - unresolvedQuestion * 12f
 
         val introPenalty = if (
             startMs < 15_000 && introPatterns.any { lower.contains(it) }
@@ -354,10 +422,11 @@ object ClipPicker {
         val densityPenalty = if (speechRate < 1.2) {
             ((1.2 - speechRate) * 15.0).toFloat()
         } else 0f
-        val durationPenalty = abs(duration - 28_000).toFloat() / 2000f
+        val durationPenalty = abs(duration - 32_000).toFloat() / 2500f
         val continuationPenalty =
             (if (startsWithContinuation(text)) 8f else 0f) +
-                (if (endsWithContinuation(text)) 6f else 0f)
+                (if (endsWithContinuation(text)) 6f else 0f) +
+                (if (cleanWords(text).lastOrNull()?.let { it in prepositions } == true) 8f else 0f)
 
         val audioBonus = (audio?.energy ?: 0f) * 14f - (audio?.silence ?: 0f) * 12f
         val motionBonus = (visual?.score ?: 0f) * 8f
@@ -371,7 +440,8 @@ object ClipPicker {
             numbers * 2f +
             audioBonus +
             motionBonus +
-            specificityBonus -
+            specificityBonus +
+            completeness -
             introPenalty -
             outroPenalty -
             startPenalty -
@@ -405,7 +475,7 @@ object ClipPicker {
             emotionWords.any { lower.contains(it) }
     }
 
-    private fun isQuestion(text: String): Boolean {
+    internal fun isQuestion(text: String): Boolean {
         if (text.contains("?")) return true
         val first = cleanWords(text).firstOrNull() ?: return false
         return questionWords.any { first.startsWith(it) }
@@ -416,9 +486,32 @@ object ClipPicker {
         return first in continuationWords
     }
 
-    private fun endsWithContinuation(text: String): Boolean {
+    internal fun endsWithContinuation(text: String): Boolean {
         val last = cleanWords(text).lastOrNull() ?: return false
         return last in continuationWords
+    }
+
+    /** История только началась, а развязки/секрета в тексте ещё нет. */
+    internal fun needsPayoff(text: String): Boolean {
+        val lower = text.lowercase()
+        val hasSetup = setupWords.any { lower.contains(it) }
+        val hasPayoff = payoffWords.any { lower.contains(it) }
+        return hasSetup && !hasPayoff
+    }
+
+    internal fun containsPayoff(text: String): Boolean {
+        val lower = text.lowercase()
+        return payoffWords.any { lower.contains(it) }
+    }
+
+    internal fun hasEvent(text: String): Boolean {
+        val lower = text.lowercase()
+        return eventWords.any { lower.contains(it) }
+    }
+
+    internal fun hasSetup(text: String): Boolean {
+        val lower = text.lowercase()
+        return setupWords.any { lower.contains(it) }
     }
 
     /**

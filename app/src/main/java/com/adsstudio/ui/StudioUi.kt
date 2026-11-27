@@ -963,6 +963,7 @@ fun ClipCard(
     exportProgress: Float?,
     onRename: (String) -> Unit,
     onExport: () -> Unit,
+    onPreview: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var editing by remember { mutableStateOf(false) }
@@ -1006,6 +1007,7 @@ fun ClipCard(
                     .width(96.dp)
                     .height(54.dp)
                     .clip(RoundedCornerShape(12.dp))
+                    .clickable(enabled = videoUri != null) { onPreview() }
             )
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
@@ -1061,6 +1063,16 @@ fun ClipCard(
                 )
             }
             Spacer(Modifier.width(8.dp))
+            TextButton(
+                onClick = onPreview,
+                enabled = videoUri != null && enabled && !isExporting
+            ) {
+                Text(
+                    "Смотреть",
+                    color = StudioColors.Cyan,
+                    style = MaterialTheme.typography.labelLarge
+                )
+            }
             TextButton(
                 onClick = {
                     draft = clip.title

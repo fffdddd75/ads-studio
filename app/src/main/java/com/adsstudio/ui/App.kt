@@ -27,18 +27,23 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,11 +55,15 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import kotlinx.coroutines.delay
 
 @Composable
 fun AdsStudioApp(vm: AppViewModel = viewModel()) {
@@ -439,6 +448,9 @@ private fun ClipsSection(
     state: UiState,
     vm: AppViewModel
 ) {
+    var previewClip by remember { mutableStateOf<SuggestedClip?>(null) }
+    val videoUri = state.videoUri
+
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         SectionHeader(
             number = "05",
@@ -446,7 +458,7 @@ private fun ClipsSection(
             trailing = { CountPill("${state.clips.size} / 5") }
         )
         Text(
-            "Проверь границы, при желании переименуй и экспортируй.",
+            "Нажми на превью или «Смотреть», чтобы проверить выбранный отрезок.",
             style = MaterialTheme.typography.bodySmall,
             color = StudioColors.TextMuted
         )
@@ -454,13 +466,122 @@ private fun ClipsSection(
             ClipCard(
                 index = index,
                 clip = clip,
-                videoUri = state.videoUri,
+                videoUri = videoUri,
                 enabled = state.busy == null,
                 ratioLabel = state.ratio.label,
                 isExporting = state.exportingClipStart == clip.startMs && state.busy != null,
                 exportProgress = state.progress,
                 onRename = { title -> vm.renameClip(clip, title) },
-                onExport = { vm.export(clip) }
+                onExport = { vm.export(clip) },
+                onPreview = { previewClip = clip }
+            )
+        }
+    }
+
+    val clipToPlay = previewClip
+    if (videoUri != null && clipToPlay != null) {
+        ClipPreviewDialog(
+            videoUri = videoUri,
+            clip = clipToPlay,
+            onDismiss = { previewClip = null }
+        )
+    }
+}
+
+@Composable
+private fun ClipPreviewDialog(
+    videoUri: Uri,
+    clip: SuggestedClip,
+    onDismiss: () -> Unit
+) {
+    val context = LocalContext.current
+    val player = remember(videoUri, clip.startMs, clip.endMs) {
+        ExoPlayer.Builder(context).build().apply {
+            setMediaItem(MediaItem.fromUri(videoUri), clip.startMs)
+            prepare()
+            playWhenReady = true
+        }
+    }
+
+    DisposableEffect(player) {
+        onDispose { player.release() }
+    }
+
+    LaunchedEffect(player, clip.startMs, clip.endMs) {
+        while (true) {
+            if (player.currentPosition >= clip.endMs ||
+                player.playbackState == Player.STATE_ENDED
+            ) {
+                player.pause()
+                break
+            }
+            delay(100)
+        }
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+                .clip(RoundedCornerShape(22.dp))
+                .background(StudioColors.SurfaceRaised)
+                .border(1.dp, StudioColors.BorderSoft, RoundedCornerShape(22.dp))
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "${formatTimecode(clip.startMs)} – ${formatTimecode(clip.endMs)}",
+                        style = StudioType.monoSmall,
+                        color = StudioColors.Cyan
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        clip.title,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = StudioColors.Text,
+                        maxLines = 2
+                    )
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "Закрыть",
+                        tint = StudioColors.TextMuted
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(16f / 9f)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color.Black)
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        PlayerView(ctx).apply {
+                            useController = true
+                            setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING)
+                        }
+                    },
+                    update = { view -> view.player = player },
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            Text(
+                "Играет только выбранный отрезок исходного видео.",
+                style = MaterialTheme.typography.bodySmall,
+                color = StudioColors.TextDim
             )
         }
     }

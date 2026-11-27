@@ -90,6 +90,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             var asrMs = 0L
             var modelMs = 0L
             var aiMs = 0L
+            var videoMs = 0L
 
             _state.update {
                 it.copy(
@@ -164,11 +165,31 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
 
+                _state.update { it.copy(busy = "Видеомодуль смотрит кадры…", progress = null) }
+                val videoStarted = SystemClock.elapsedRealtime()
+                clips = withContext(Dispatchers.IO) {
+                    try {
+                        VideoVision.refineClips(
+                            context = app,
+                            uri = uri,
+                            clips = clips,
+                            utterances = utterances,
+                            totalDurationMs = durationMs
+                        )
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Throwable) {
+                        clips
+                    }
+                }
+                clips = ClipPicker.fillSelection(clips, ranked, 5)
+                videoMs = SystemClock.elapsedRealtime() - videoStarted
+
                 val totalMs = SystemClock.elapsedRealtime() - startedAt
                 if (totalMs > 45_000) {
                     notice = listOfNotNull(
                         notice,
-                        timingText(totalMs, asrMs, modelMs, aiMs)
+                        timingText(totalMs, asrMs, modelMs, aiMs, videoMs)
                     ).joinToString(" ")
                 }
 
@@ -455,10 +476,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return info.availMem >= 2_200L * 1024 * 1024
     }
 
-    private fun timingText(totalMs: Long, asrMs: Long, modelMs: Long, aiMs: Long): String {
+    private fun timingText(
+        totalMs: Long,
+        asrMs: Long,
+        modelMs: Long,
+        aiMs: Long,
+        videoMs: Long = 0L
+    ): String {
         val parts = mutableListOf("речь ${duration(asrMs)}")
         if (modelMs >= 5_000) parts += "загрузка ИИ ${duration(modelMs)}"
         if (aiMs > 0) parts += "ИИ ${duration(aiMs)}"
+        if (videoMs >= 1_000) parts += "видеомодуль ${duration(videoMs)}"
         return "Готово за ${duration(totalMs)}: ${parts.joinToString(", ")}."
     }
 
