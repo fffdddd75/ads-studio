@@ -55,12 +55,13 @@ class VlmServer(private val context: Context) : Closeable {
             "--mmproj", mmprojPath,
             "-c", "2048",
             "-np", "1",
-            "-t", "4",
+            "-b", "256",
+            "-ub", "128",
             "--host", "127.0.0.1",
             "--port", port.toString(),
             "--no-webui",
             "--jinja",
-            "--image-max-tokens", "128",
+            "--image-max-tokens", "256",
             "--no-warmup",
             "--log-colors", "off"
         ) + cpuAffinityArgs()
@@ -172,11 +173,13 @@ class VlmServer(private val context: Context) : Closeable {
      * 8-ядерном телефоне это 4–7, что даёт кратный рост префилла.
      */
     private fun cpuAffinityArgs(): List<String> {
-        val mask = bigCoreMask(Runtime.getRuntime().availableProcessors()) ?: return emptyList()
-        return listOf("--cpu-mask", mask)
+        val cpus = bigCores(Runtime.getRuntime().availableProcessors())
+            ?: return listOf("-t", "6")
+        val threads = cpus.size.coerceIn(2, 6)
+        return listOf("-t", threads.toString(), "--cpu-mask", maskOf(cpus))
     }
 
-    private fun bigCoreMask(cores: Int): String? {
+    private fun bigCores(cores: Int): List<Int>? {
         if (cores < 4) return null
 
         val freqs = (0 until cores).map { cpu ->
@@ -191,12 +194,12 @@ class VlmServer(private val context: Context) : Closeable {
         if (freqs.all { it != null }) {
             val max = freqs.filterNotNull().maxOrNull() ?: return null
             val big = freqs.indices.filter { (freqs[it] ?: 0L) >= max * 85 / 100 }
-            if (big.isNotEmpty() && big.size < cores) return maskOf(big)
+            if (big.isNotEmpty() && big.size < cores) return big
         }
 
         // Фолбэк: верхняя половина ядер. На 8-ядерных это 4–7.
-        if (cores >= 8) return maskOf((cores / 2 until cores).toList())
-        if (cores == 6) return maskOf(listOf(4, 5))
+        if (cores >= 8) return (cores / 2 until cores).toList()
+        if (cores == 6) return listOf(4, 5)
         return null
     }
 
