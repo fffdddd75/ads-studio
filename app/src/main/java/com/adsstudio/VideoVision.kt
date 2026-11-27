@@ -27,27 +27,27 @@ object VideoVision {
     private const val SAMPLE_STEP_MS = 600L
     private const val PRE_ROLL_MS = 3_000L
     private const val POST_ROLL_MS = 15_000L
-    private const val MAX_SAMPLES = 40
     private const val CUT_THRESHOLD = 42f
     private const val MOTION_THRESHOLD = 18f
     private const val MIN_CLIP_MS = 16_000L
-    private const val MAX_CLIP_MS = 60_000L
 
     fun refineClips(
         context: Context,
         uri: Uri,
         clips: List<SuggestedClip>,
         utterances: List<Utterance>,
-        totalDurationMs: Long
+        totalDurationMs: Long,
+        maxClipMs: Long = 60_000L
     ): List<SuggestedClip> {
         if (clips.isEmpty()) return clips
+        val limitMs = maxClipMs.coerceIn(MIN_CLIP_MS, 240_000L)
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(context, uri)
             clips.map { clip ->
-                val scene = runCatching { analyzeScene(retriever, clip, totalDurationMs) }
+                val scene = runCatching { analyzeScene(retriever, clip, totalDurationMs, limitMs) }
                     .getOrNull()
-                extendClip(clip, utterances, scene, totalDurationMs)
+                extendClip(clip, utterances, scene, totalDurationMs, limitMs)
             }.sortedBy { it.startMs }
         } catch (_: Throwable) {
             clips
@@ -59,14 +59,16 @@ object VideoVision {
     private fun analyzeScene(
         retriever: MediaMetadataRetriever,
         clip: SuggestedClip,
-        totalDurationMs: Long
+        totalDurationMs: Long,
+        maxClipMs: Long
     ): SceneHint? {
         if (totalDurationMs <= 0) return null
         val from = (clip.startMs - PRE_ROLL_MS).coerceAtLeast(0)
         val to = (clip.endMs + POST_ROLL_MS).coerceAtMost(totalDurationMs)
         if (to - from < 1_000) return null
 
-        val step = maxOf(SAMPLE_STEP_MS, (to - from) / MAX_SAMPLES)
+        val maxSamples = if (maxClipMs > 120_000L) 60 else 40
+        val step = maxOf(SAMPLE_STEP_MS, (to - from) / maxSamples)
         var time = from
         var previous: IntArray? = null
         var sum = 0f
@@ -74,7 +76,7 @@ object VideoVision {
         var motionEnd: Long? = null
         val cuts = mutableListOf<Long>()
 
-        while (time <= to && count < MAX_SAMPLES) {
+        while (time <= to && count < maxSamples) {
             val bitmap = runCatching {
                 retriever.getFrameAtTime(
                     time * 1000,
@@ -118,7 +120,8 @@ object VideoVision {
         clip: SuggestedClip,
         utterances: List<Utterance>,
         scene: SceneHint?,
-        totalDurationMs: Long
+        totalDurationMs: Long,
+        maxClipMs: Long
     ): SuggestedClip {
         if (utterances.isEmpty()) return clip
 
@@ -170,7 +173,7 @@ object VideoVision {
             }
             if (next.startMs - lastEnd > gapLimit) break
             if (totalDurationMs > 0 && next.endMs > totalDurationMs) break
-            if (next.endMs - start > MAX_CLIP_MS) break
+            if (next.endMs - start > maxClipMs) break
 
             val shouldExtend = currentDuration < MIN_CLIP_MS ||
                 ClipPicker.needsPayoff(text) ||
@@ -188,7 +191,7 @@ object VideoVision {
 
         // Если рядом склейка, добираем кадр до неё, чтобы не обрывать сцену.
         scene?.endCutMs?.let { cut ->
-            if (cut > end && cut - end <= 2_500 && cut - start <= MAX_CLIP_MS) {
+            if (cut > end && cut - end <= 2_500 && cut - start <= maxClipMs) {
                 end = cut
             }
         }
@@ -196,7 +199,7 @@ object VideoVision {
         // Если движение продолжается после речи, даём ему дойти до паузы.
         scene?.motionEndMs?.let { motion ->
             val target = motion + 500
-            if (target > end && target - end <= 2_500 && target - start <= MAX_CLIP_MS) {
+            if (target > end && target - end <= 2_500 && target - start <= maxClipMs) {
                 end = target
             }
         }
@@ -208,7 +211,7 @@ object VideoVision {
 
         start = start.coerceAtLeast(0)
         if (totalDurationMs > 0) end = end.coerceAtMost(totalDurationMs)
-        if (end - start > MAX_CLIP_MS) end = start + MAX_CLIP_MS
+        if (end - start > maxClipMs) end = start + maxClipMs
         if (end <= start) return clip
 
         val finalText = utterances

@@ -30,12 +30,13 @@ object LlmClipSelector {
         val count = minOf(maxClips, candidates.size)
         return """
             <|endoftext|><|im_start|>system
-            Ты — редактор вирусных коротких видео. Ты выбираешь самые интересные моменты для Shorts.
+            Ты — редактор вирусных видео. Ты выбираешь самые интересные законченные моменты.
             Главное — смысл текста: конкретный случай, конфликт, неожиданный поворот, сильное мнение, полезный совет, эмоция.
             Скучно и не выбирай: приветствие, «в этом видео», представление, реклама, подписка, вода, пустое перечисление.
             Выбирай законченную историю: завязка и развязка. Если есть «секрет», «сейчас расскажу», «и тут»,
             но нет «оказалось», «в итоге», «вот почему» или финала — это обрывок, не выбирай его.
             Подсказки: [движение 0.8] — действие; [склейки 2] — смена планов; [звук 0.7] — громкая речь.
+            Фрагменты могут быть длиной до 4 минут: смотри начало, середину и конец, а не только первые слова.
             Пример: «Всем привет, сегодня...» — скучно. «Вдруг машина выскочила...» — интересно.
             Отвечай только номерами через запятую, от лучшего к худшему. Без объяснений.
             <|im_end|>
@@ -78,11 +79,12 @@ object LlmClipSelector {
         val checklist = questions.ifBlank { defaultQuestions }.take(300)
         return """
             <|endoftext|><|im_start|>system
-            Ты — редактор Shorts. Ответь на вопросы критика и выбери $count лучших фрагментов.
+            Ты — редактор вирусных видео. Ответь на вопросы критика и выбери $count лучших фрагментов.
             Главное — конкретное событие, конфликт, неожиданность, польза или эмоция.
             Не выбирай приветствие, «в этом видео», рекламу, подписку и воду.
             Выбирай только законченную историю: завязка + развязка. Обрывок без финала не выбирай.
             Подсказки: [движение 0.8] — действие; [склейки 2] — смена планов; [звук 0.7] — громкая речь.
+            Фрагменты могут быть длиной до 4 минут: смотри начало, середину и конец, а не только первые слова.
             <|im_end|>
             <|im_start|>user
             Вопросы критика:
@@ -181,10 +183,19 @@ object LlmClipSelector {
         candidates: List<SuggestedClip>,
         hints: Map<Int, String>
     ): String = candidates.mapIndexed { index, clip ->
-        val text = clip.text.replace(Regex("\\s+"), " ").take(120)
+        val full = clip.text.replace(Regex("\\s+"), " ").trim()
+        val body = if (full.length <= 180) {
+            full
+        } else {
+            val middleStart = (full.length / 2 - 40).coerceAtLeast(0)
+            val middleEnd = (full.length / 2 + 40).coerceAtMost(full.length)
+            "${full.take(80)} … ${full.substring(middleStart, middleEnd).trim()} … ${full.takeLast(80)}"
+        }
+        val seconds = ((clip.endMs - clip.startMs) / 1000).coerceAtLeast(1)
+        val length = if (seconds >= 120) "${seconds / 60} мин" else "$seconds с"
         val hint = hints[index]?.takeIf { it.isNotBlank() } ?: hintOf(clip)
         val prefix = if (hint.isBlank()) "" else " [$hint]"
-        "${index + 1}.$prefix $text"
+        "${index + 1}. [$length]$prefix $body"
     }.joinToString("\n")
 
     private fun hintOf(clip: SuggestedClip): String {

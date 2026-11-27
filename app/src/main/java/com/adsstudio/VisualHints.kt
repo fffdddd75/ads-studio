@@ -19,7 +19,8 @@ data class VisualHint(
 
 object VisualHints {
 
-    private val fractions = listOf(0.18, 0.5, 0.82)
+    private val shortFractions = listOf(0.18, 0.5, 0.82)
+    private val longFractions = listOf(0.08, 0.25, 0.5, 0.75, 0.92)
 
     /** Возвращает список той же длины, что и clips: null — кадры не удалось прочитать. */
     fun analyzeScores(
@@ -48,6 +49,8 @@ object VisualHints {
         .toMap()
 
     private fun analyzeClip(retriever: MediaMetadataRetriever, clip: SuggestedClip): VisualHint? {
+        val duration = clip.endMs - clip.startMs
+        val fractions = if (duration > 90_000L) longFractions else shortFractions
         val frames = fractions.mapNotNull { fraction ->
             val timeMs = clip.startMs + ((clip.endMs - clip.startMs) * fraction).toLong()
             runCatching {

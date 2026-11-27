@@ -28,6 +28,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val llmModels = LlmModelManager(application)
     private val _state = MutableStateFlow(
         UiState(
+            maxClipMs = prefs.getLong("max_clip_ms", 240_000L),
             llmEnabled = prefs.getBoolean("llm_enabled", true),
             llmReady = llmModels.isReady()
         )
@@ -130,7 +131,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
                 _state.update { it.copy(busy = "Смотрю кадры и слушаю звук…", progress = null) }
                 val durationMs = _state.value.info?.durationMs ?: 0L
-                val candidates = ClipPicker.candidates(utterances, 16, durationMs)
+                val maxClipMs = _state.value.maxClipMs
+                val candidates = ClipPicker.candidates(utterances, 16, durationMs, maxClipMs)
                 val audio = withContext(Dispatchers.IO) {
                     runCatching { AudioFeatures.analyze(wav, candidates) }
                         .getOrDefault(List<AudioHint?>(candidates.size) { null })
@@ -140,7 +142,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         .getOrDefault(List<VisualHint?>(candidates.size) { null })
                 }
                 wav.delete()
-                val ranked = ClipPicker.rescore(candidates, durationMs, audio, visual)
+                val ranked = ClipPicker.rescore(candidates, durationMs, audio, visual, maxClipMs)
                 var clips = ClipPicker.fillSelection(
                     ClipPicker.pickFromCandidates(ranked, 5),
                     ranked,
@@ -174,7 +176,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             uri = uri,
                             clips = clips,
                             utterances = utterances,
-                            totalDurationMs = durationMs
+                            totalDurationMs = durationMs,
+                            maxClipMs = maxClipMs
                         )
                     } catch (error: CancellationException) {
                         throw error
@@ -331,10 +334,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         .map { it.first }
                         .distinctBy { it.startMs to it.endMs }
 
+                val allowOverlap = (combined.maxOfOrNull { it.endMs - it.startMs } ?: 0L) > 60_000L
                 val selected = mutableListOf<SuggestedClip>()
                 for (clip in combined) {
                     if (selected.size >= 5) break
-                    if (selected.any { it.startMs < clip.endMs && clip.startMs < it.endMs }) continue
+                    if (!allowOverlap && selected.any { it.startMs < clip.endMs && clip.startMs < it.endMs }) continue
                     selected += clip
                 }
                 ClipPicker.fillSelection(selected, candidates, 5)
@@ -366,6 +370,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setRatio(ratio: OutputRatio) {
         _state.update { it.copy(ratio = ratio) }
+    }
+
+    fun setMaxClipMs(value: Long) {
+        val clamped = value.coerceIn(60_000L, 240_000L)
+        prefs.edit().putLong("max_clip_ms", clamped).apply()
+        _state.update {
+            it.copy(
+                maxClipMs = clamped,
+                notice = if (it.clips.isNotEmpty()) {
+                    "Длина изменена. Нажми «Нарезать заново», чтобы пересобрать моменты."
+                } else {
+                    it.notice
+                }
+            )
+        }
     }
 
     fun setLlmEnabled(enabled: Boolean) {

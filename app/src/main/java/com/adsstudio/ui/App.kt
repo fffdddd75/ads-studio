@@ -9,6 +9,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -190,7 +191,7 @@ private fun Hero() {
                     append("Длинное видео.\n")
                 }
                 withStyle(SpanStyle(color = StudioColors.Orange)) {
-                    append("Пять коротких.")
+                    append("Пять сильных.")
                 }
             },
             style = MaterialTheme.typography.displayLarge
@@ -253,7 +254,9 @@ private fun ProjectContent(
         Reveal(1) {
             FormatSection(
                 selected = state.ratio,
-                onSelect = vm::setRatio
+                maxClipMs = state.maxClipMs,
+                onSelect = vm::setRatio,
+                onSelectLength = vm::setMaxClipMs
             )
         }
 
@@ -371,7 +374,9 @@ private fun SourceSection(
 @Composable
 private fun FormatSection(
     selected: OutputRatio,
-    onSelect: (OutputRatio) -> Unit
+    maxClipMs: Long,
+    onSelect: (OutputRatio) -> Unit,
+    onSelectLength: (Long) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeader("02", "Формат")
@@ -390,7 +395,50 @@ private fun FormatSection(
             style = MaterialTheme.typography.bodySmall,
             color = StudioColors.TextDim
         )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "Длина момента",
+            style = MaterialTheme.typography.labelLarge,
+            color = StudioColors.TextMuted
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LengthChip("до 1 мин", maxClipMs == 60_000L) { onSelectLength(60_000L) }
+            LengthChip("до 2 мин", maxClipMs == 120_000L) { onSelectLength(120_000L) }
+            LengthChip("до 4 мин", maxClipMs == 240_000L) { onSelectLength(240_000L) }
+        }
+        Text(
+            "4 минуты — больше контекста для длинных историй. После смены нажми «Нарезать заново».",
+            style = MaterialTheme.typography.bodySmall,
+            color = StudioColors.TextDim
+        )
     }
+}
+
+@Composable
+private fun LengthChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val shape = RoundedCornerShape(999.dp)
+    Text(
+        label,
+        style = MaterialTheme.typography.labelLarge,
+        color = if (selected) StudioColors.Orange else StudioColors.TextMuted,
+        modifier = Modifier
+            .clip(shape)
+            .background(
+                if (selected) StudioColors.Orange.copy(alpha = 0.12f)
+                else StudioColors.Surface
+            )
+            .border(
+                1.dp,
+                if (selected) StudioColors.Orange else StudioColors.BorderSoft,
+                shape
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 7.dp)
+    )
 }
 
 @Composable

@@ -143,16 +143,24 @@ object ClipPicker {
     private data class Unit(val startMs: Long, val endMs: Long, val text: String)
 
     /** Эвристический выбор — запасной вариант и основа для кандидатов. */
-    fun pick(utterances: List<Utterance>, maxClips: Int = 5): List<SuggestedClip> =
-        selectDiverse(buildCandidates(buildUnits(utterances), 0L), maxClips)
+    fun pick(
+        utterances: List<Utterance>,
+        maxClips: Int = 5,
+        maxClipMs: Long = 60_000L
+    ): List<SuggestedClip> =
+        selectDiverse(buildCandidates(buildUnits(utterances), 0L, maxClipMs), maxClips)
 
     /** Кандидаты для LLM: интересные, не пересекаются, разбросаны по видео. */
     fun candidates(
         utterances: List<Utterance>,
         limit: Int = 12,
-        totalDurationMs: Long = 0L
+        totalDurationMs: Long = 0L,
+        maxClipMs: Long = 60_000L
     ): List<SuggestedClip> =
-        selectDiverse(buildCandidates(buildUnits(utterances), totalDurationMs), limit)
+        selectDiverse(
+            buildCandidates(buildUnits(utterances), totalDurationMs, maxClipMs),
+            limit
+        )
 
     fun pickFromCandidates(candidates: List<SuggestedClip>, maxClips: Int = 5): List<SuggestedClip> =
         selectDiverse(candidates, maxClips)
@@ -164,10 +172,12 @@ object ClipPicker {
         maxClips: Int = 5
     ): List<SuggestedClip> {
         val result = selected.distinctBy { it.startMs to it.endMs }.toMutableList()
+        val allowOverlap = ((selected + candidates)
+            .maxOfOrNull { it.endMs - it.startMs } ?: 0L) > 60_000L
         for (candidate in candidates.sortedByDescending { it.score }) {
             if (result.size >= maxClips) break
             if (result.any { it.startMs == candidate.startMs && it.endMs == candidate.endMs }) continue
-            if (result.any { it.startMs < candidate.endMs && candidate.startMs < it.endMs }) continue
+            if (!allowOverlap && result.any { it.startMs < candidate.endMs && candidate.startMs < it.endMs }) continue
             result += candidate
         }
         return result.sortedBy { it.startMs }
@@ -181,7 +191,8 @@ object ClipPicker {
         candidates: List<SuggestedClip>,
         totalDurationMs: Long,
         audio: List<AudioHint?>,
-        visual: List<VisualHint?>
+        visual: List<VisualHint?>,
+        maxClipMs: Long = 60_000L
     ): List<SuggestedClip> {
         if (candidates.isEmpty()) return emptyList()
 
@@ -207,7 +218,8 @@ object ClipPicker {
                     totalDurationMs = totalDurationMs,
                     audio = audio.getOrNull(index),
                     visual = visual.getOrNull(index),
-                    specificity = specificity
+                    specificity = specificity,
+                    maxClipMs = maxClipMs
                 ),
                 audio = audio.getOrNull(index),
                 visual = visual.getOrNull(index)
@@ -237,7 +249,12 @@ object ClipPicker {
         return units
     }
 
-    private fun buildCandidates(units: List<Unit>, totalDurationMs: Long): List<SuggestedClip> {
+    private fun buildCandidates(
+        units: List<Unit>,
+        totalDurationMs: Long,
+        maxClipMs: Long
+    ): List<SuggestedClip> {
+        val limitMs = maxClipMs.coerceIn(8_000L, 240_000L)
         val candidates = mutableListOf<SuggestedClip>()
 
         fun add(startIndex: Int, endIndex: Int) {
@@ -245,7 +262,7 @@ object ClipPicker {
             val start = units[startIndex].startMs
             val end = units[endIndex].endMs
             val duration = end - start
-            if (duration !in 8_000L..60_000L) return
+            if (duration !in 8_000L..limitMs) return
             val texts = units.subList(startIndex, endIndex + 1).map { it.text }
             val text = texts.joinToString(" ")
             if (start < 8_000 && isIntroOnly(text)) return
@@ -258,9 +275,31 @@ object ClipPicker {
                     text = text,
                     duration = duration,
                     startMs = start,
-                    totalDurationMs = totalDurationMs
+                    totalDurationMs = totalDurationMs,
+                    maxClipMs = limitMs
                 )
             )
+        }
+
+        // Длинное окно вокруг события: даём модели 1–4 минуты контекста,
+        // чтобы она видела не только первую фразу, но и развитие/финал.
+        fun addLongWindow(anchorIndex: Int) {
+            val anchor = units[anchorIndex]
+            val startTarget = (anchor.startMs - limitMs / 3).coerceAtLeast(0L)
+            val endTarget = (anchor.startMs + limitMs * 2 / 3).let { target ->
+                if (totalDurationMs > 0) target.coerceAtMost(totalDurationMs) else target
+            }
+            var startIndex = units.indexOfFirst { it.endMs >= startTarget }
+                .takeIf { it >= 0 } ?: anchorIndex
+            var endIndex = units.indexOfLast { it.startMs <= endTarget }
+                .takeIf { it >= 0 } ?: anchorIndex
+            while (startIndex < anchorIndex && endIndex > anchorIndex &&
+                units[endIndex].endMs - units[startIndex].startMs > limitMs
+            ) {
+                if (anchorIndex - startIndex >= endIndex - anchorIndex) startIndex++ else endIndex--
+            }
+            if (endIndex < startIndex) endIndex = startIndex
+            add(startIndex, endIndex)
         }
 
         for (i in units.indices) {
@@ -269,7 +308,7 @@ object ClipPicker {
             while (endIndex + 1 < units.size) {
                 val next = units[endIndex + 1]
                 if (next.startMs - units[endIndex].endMs > 1_500) break
-                if (next.endMs - units[i].startMs > 60_000) break
+                if (next.endMs - units[i].startMs > limitMs) break
                 val current = units.subList(i, endIndex + 1).joinToString(" ") { it.text }
                 val duration = units[endIndex].endMs - units[i].startMs
                 val shouldExtend = duration < 18_000 ||
@@ -279,6 +318,9 @@ object ClipPicker {
                 endIndex++
             }
             add(i, endIndex)
+            if (hasEvent(units[i].text) || needsPayoff(units[i].text) || containsPayoff(units[i].text)) {
+                addLongWindow(i)
+            }
 
             // 2. Окно с завязкой: захватываем предыдущую фразу, если в ней вопрос/начало истории.
             if (i > 0 && units[i].startMs - units[i - 1].endMs <= 3_000 &&
@@ -315,7 +357,7 @@ object ClipPicker {
             if (needsPayoff(units[i].text) || isQuestion(units[i].text)) {
                 var j = i + 1
                 var last = i
-                while (j < units.size && units[j].endMs - units[i].startMs <= 60_000) {
+                while (j < units.size && units[j].endMs - units[i].startMs <= limitMs) {
                     if (units[j].startMs - units[last].endMs > 5_000) break
                     last = j
                     if (containsPayoff(units[j].text)) {
@@ -353,11 +395,14 @@ object ClipPicker {
     private fun selectDiverse(candidates: List<SuggestedClip>, limit: Int): List<SuggestedClip> {
         if (candidates.isEmpty() || limit <= 0) return emptyList()
         val chosen = mutableListOf<SuggestedClip>()
+        val maxDuration = candidates.maxOfOrNull { it.endMs - it.startMs } ?: 0L
+        val allowOverlap = maxDuration > 60_000L
+        val spacing = if (allowOverlap) maxOf(24_000L, maxDuration / 2) else 24_000L
 
         for (candidate in candidates.sortedByDescending { it.score }) {
             if (chosen.size >= limit) break
-            if (chosen.any { it.startMs < candidate.endMs && candidate.startMs < it.endMs }) continue
-            if (chosen.any { abs(it.startMs - candidate.startMs) < 24_000 }) continue
+            if (!allowOverlap && chosen.any { it.startMs < candidate.endMs && candidate.startMs < it.endMs }) continue
+            if (chosen.any { abs(it.startMs - candidate.startMs) < spacing }) continue
             if (chosen.any { textSimilarity(it.text, candidate.text) >= 0.72 }) continue
             chosen += candidate
         }
@@ -366,7 +411,7 @@ object ClipPicker {
             for (candidate in candidates.sortedByDescending { it.score }) {
                 if (chosen.size >= limit) break
                 if (chosen.any { it.startMs == candidate.startMs && it.endMs == candidate.endMs }) continue
-                if (chosen.any { it.startMs < candidate.endMs && candidate.startMs < it.endMs }) continue
+                if (!allowOverlap && chosen.any { it.startMs < candidate.endMs && candidate.startMs < it.endMs }) continue
                 chosen += candidate
             }
         }
@@ -381,7 +426,8 @@ object ClipPicker {
         totalDurationMs: Long = 0L,
         audio: AudioHint? = null,
         visual: VisualHint? = null,
-        specificity: Float = 0f
+        specificity: Float = 0f,
+        maxClipMs: Long = 60_000L
     ): Float {
         val lower = text.lowercase()
         val words = cleanWords(text)
@@ -422,7 +468,13 @@ object ClipPicker {
         val densityPenalty = if (speechRate < 1.2) {
             ((1.2 - speechRate) * 15.0).toFloat()
         } else 0f
-        val durationPenalty = abs(duration - 32_000).toFloat() / 2500f
+        val targetDuration = if (maxClipMs <= 60_000L) {
+            32_000f
+        } else {
+            (maxClipMs * 0.6f).coerceIn(60_000f, 150_000f)
+        }
+        val durationPenalty = abs(duration.toFloat() - targetDuration) /
+            (if (maxClipMs <= 60_000L) 2500f else 6000f)
         val continuationPenalty =
             (if (startsWithContinuation(text)) 8f else 0f) +
                 (if (endsWithContinuation(text)) 6f else 0f) +

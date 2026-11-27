@@ -36,6 +36,7 @@ data class UiState(
     val transcript: List<Utterance> = emptyList(),
     val clips: List<SuggestedClip> = emptyList(),
     val ratio: OutputRatio = OutputRatio.RATIO_16_9,
+    val maxClipMs: Long = 240_000L,
     val llmEnabled: Boolean = true,
     val llmReady: Boolean = false,
     val adSet: Boolean = false,
