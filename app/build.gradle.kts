@@ -11,8 +11,8 @@ android {
         applicationId = "com.adsstudio"
         minSdk = 29
         targetSdk = 34
-        versionCode = 9
-        versionName = "0.4.3"
+        versionCode = 10
+        versionName = "0.4.4"
 
         ndk {
             abiFilters.add("arm64-v8a")

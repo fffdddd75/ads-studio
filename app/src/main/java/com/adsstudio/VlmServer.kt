@@ -133,7 +133,7 @@ class VlmServer(private val context: Context) : Closeable {
         val connection = (URL("$baseUrl/v1/chat/completions").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15_000
-            readTimeout = 180_000
+            readTimeout = 300_000
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Accept", "application/json")
@@ -159,12 +159,32 @@ class VlmServer(private val context: Context) : Closeable {
                 .getJSONObject("message")
                 .optString("content", "")
         } catch (timeout: java.net.SocketTimeoutException) {
-            error("слишком долго думал")
+            val progress = lastProgress()
+            error(
+                if (progress.isBlank()) "слишком долго думал"
+                else "слишком долго думал: $progress"
+            )
         } catch (connect: java.net.ConnectException) {
             error("не отвечает")
         } finally {
             connection.disconnect()
         }
+    }
+
+    private fun lastProgress(): String {
+        return runCatching {
+            val line = log.readLines()
+                .lastOrNull { it.contains("prompt processing") }
+                ?: return ""
+            val tokens = Regex("n_tokens =\\s*(\\d+)")
+                .find(line)?.groupValues?.getOrNull(1)
+            val speed = Regex("([\\d.]+) tokens per second")
+                .find(line)?.groupValues?.getOrNull(1)
+            listOfNotNull(
+                tokens?.let { "обработано $it токенов" },
+                speed?.let { "$it ток/с" }
+            ).joinToString(", ")
+        }.getOrDefault("")
     }
 
     /**
