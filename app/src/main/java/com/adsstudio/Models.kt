@@ -14,7 +14,9 @@ data class SuggestedClip(
     val endMs: Long,
     val title: String,
     val text: String,
-    val score: Float
+    val score: Float,
+    val audio: AudioHint? = null,
+    val visual: VisualHint? = null
 )
 
 enum class OutputRatio(

@@ -4,7 +4,7 @@
 Читай его целиком перед первым изменением кода. Здесь: что за продукт, что уже работает,
 как устроен код, где грабли и что делать дальше.
 
-Дата актуализации: 27.11.2026. Версия: 0.4.5 (`versionCode 11`).
+Дата актуализации: 27.11.2026. Версия: 0.5.0 (`versionCode 12`).
 
 ---
 
@@ -35,8 +35,8 @@ Android-приложение для телефона: пользователь �
 | UI | Kotlin + Jetpack Compose, Material 3, Compose BOM 2024.06.00, Kotlin compiler ext 1.5.14 |
 | Медиа | Media3 Transformer (нарезка, кроп, оверлей, энкод) |
 | ASR | Vosk (`vosk-android`), модель small-ru в assets/файлах |
-| Текстовый ИИ | Qwen2.5-0.5B-Instruct Q8, формат `.task` (MediaPipe LLM Inference) |
-| Видео-ИИ | Qwen2.5-VL-3B Q4_K_M + mmproj Q8 через llama.cpp `llama-server` (HTTP на localhost) |
+| Текстовый ИИ | Qwen2.5-0.5B-Instruct Q8, формат `.task` (MediaPipe LLM Inference) — **основной режим** |
+| Видео-ИИ | Qwen2.5-VL-3B Q4_K_M + mmproj Q8 через llama.cpp `llama-server` — только необязательный эксперимент, требует ~3,5 ГБ свободной памяти |
 | Сборка | GitHub Actions, Gradle 8.7, JDK 17, AGP/SDK 34 |
 | Хранение настроек | SharedPreferences `ads_studio` |
 
@@ -50,7 +50,8 @@ app/src/main/java/com/adsstudio/
   VideoProbe.kt           MediaMetadataRetriever: длительность/размер/поворот
   AudioExtractor.kt       MediaCodec → WAV 16 kHz mono
   VoskAsr.kt              Vosk → List<Utterance> с прогрессом
-  ClipPicker.kt           эвристика: кандидаты, оценка, добор до 5
+  ClipPicker.kt           эвристика: кандидаты, смысл/звук/движение, добор до 5
+  AudioFeatures.kt        громкость, паузы и темп речи из WAV
   LlmClipSelector.kt      промпт и парсер ответа быстрой LLM
   LocalLlm.kt             обёртка MediaPipe LlmInference
   LlmModelManager.kt      скачивание/проверка .task (Qwen 0.5B)
@@ -77,11 +78,15 @@ onVideoPicked(uri)            AppViewModel
 analyze()
   → AudioExtractor.extract()  WAV 16k mono, прогресс 0..1
   → VoskAsr.transcribe()      List<Utterance>(startMs, endMs, text)
-  → ClipPicker.candidates(u, 10)   до 10 кандидатов, у каждого score
+  → ClipPicker.candidates(u, 16, duration)  до 16 кандидатов по тексту
+  → AudioFeatures.analyze(wav)   громкость, паузы, темп речи
+  → VisualHints.analyzeScores()  движение и склейки в кадре
+  → ClipPicker.rescore()         смысл + звук + движение, штрафы за вступление/воду
   → выбор 5 клипов, три режима:
-      A. llmEnabled=false            → ClipPicker.pickFromCandidates(candidates, 5)
-      B. llmEnabled && !vlmEnabled   → chooseWithFastLlm() (Qwen 0.5B по тексту)
-      C. llmEnabled && vlmEnabled    → VLM, при ошибке → B, при ошибке B → A
+      A. llmEnabled=false            → ClipPicker.pickFromCandidates(ranked, 5)
+      B. llmEnabled && !vlmEnabled   → chooseWithFastLlm() (Qwen 0.5B ранжирует 8 лучших)
+      C. llmEnabled && vlmEnabled    → VLM, но только если свободно ≥3,5 ГБ;
+                                        при ошибке/нехватке памяти → B, затем A
   → VisualHints.analyze()     подписи к кадрам
   → UiState(clips, notice, busy=null)
 exportAll()
@@ -127,8 +132,8 @@ GGML_BACKEND_PATH=<nativeLibraryDir>
 HOME=<filesDir>   TMPDIR=<cacheDir>   (LD_PRELOAD удаляется)
 ```
 
-Флаги: `-m <model> --mmproj <mmproj> -c 2048 -np 1 -b 512 -ub 512 -t <big cores>
---cpu-mask <mask> --host 127.0.0.1 --port 18081 --no-webui --jinja
+Флаги: `-m <model> --mmproj <mmproj> -c 1024 -np 1 -b 512 -ub 256 -t <big cores>
+--cpu-mask <mask> --host 127.0.0.1 --port <свободный> --no-webui --jinja
 --image-max-tokens 96 --no-warmup --log-colors off`.
 
 В APK лежат три варианта CPU-ядер: `armv8.0_1` (база), `armv8.2_1/2` (dotprod/i8mm)
@@ -138,6 +143,9 @@ HOME=<filesDir>   TMPDIR=<cacheDir>   (LD_PRELOAD удаляется)
 
 Сервер **переиспользуется** между анализами: инстанс живёт в `AppViewModel.vlmServer`,
 закрывается в `onCleared()`. Не возвращай `VlmServer(app).use { }` — это убивает кэш модели.
+Перед запуском приложение убивает осиротевший `llama-server` от прошлой версии
+(PID-файл + поиск по `/proc`) и берёт случайный свободный порт. Это лечит зависание
+после обновления приложения, когда старый сервер держал 2,8 ГБ и порт 18081.
 
 ### Запрос
 
@@ -153,10 +161,34 @@ OpenAI-совместимый `POST /v1/chat/completions`, `stream=false`, `temp
 
 ### Память
 
-Веса ~2,8 ГБ + KV-кэш под 2048 токенов. На устройстве 8 ГБ физической + 8 ГБ swap.
-При нехватке памяти Android убьёт процесс — это ловится как ошибка и уходит в откат.
-Если начнутся OOM: `-c 4096`, `--cache-type-k q8_0 --cache-type-v q8_0`, `--no-mmap`,
-либо квант Q3_K_M.
+Основной режим — Qwen 0.5B (`.task` ~520 МБ) + Vosk (~45 МБ). Этого хватает
+на Honor 70: тяжёлая 3B-видеомодель больше не грузится по умолчанию.
+
+3B VLM — только эксперимент. Веса ~2,8 ГБ + mmproj + KV/вычисления, на практике
+нужно ~3,5 ГБ свободной памяти. `AppViewModel.hasEnoughMemoryForVlm()` проверяет
+`ActivityManager.MemoryInfo.availMem`; если меньше 3,8 ГБ, VLM не запускается,
+настройка автоматически переключается на «Быструю», а анализ сразу идёт через 0.5B.
+Это защищает от OOM и многоминутных зависаний.
+Если VLM всё же включён и падает — откат на 0.5B, затем на эвристику.
+
+## 6.1. Умный отбор без 3B-видеомодели
+
+Главная идея 0.5.0: не просить маленькую модель «понять видео», а заранее
+посчитать признаки и дать ей только короткий список.
+
+- **Текст.** Кандидаты строятся по паузам и границам фраз. Баллы: событие
+  («вдруг», «выскочил», «врезался», «упал»), конфликт, польза, вопрос+ответ,
+  конкретные числа. Штрафы: приветствие, «в этом видео», подписка, реклама,
+  филлеры, обрыв фразы, старт в первые 5–10 секунд.
+- **Звук.** `AudioFeatures` читает уже готовый WAV 16 кГц: громкость (RMS),
+  доля пауз, темп речи. Громкая плотная речь получает плюс, длинные паузы — минус.
+- **Картинка.** `VisualHints` берёт 3 кадра на кандидата, сравнивает 8×8-подписи:
+  движение и склейки. Это не тяжёлая видеомодель, память почти не тратится.
+- **Разнообразие.** Кандидаты с одинаковым текстом (Jaccard ≥ 0,72) и пересечением
+  по времени отбрасываются. Итог — 5 разных моментов, а не пять вариаций вступления.
+- **LLM.** Qwen 0.5B получает 8 лучших кандидатов с подсказками `[движение 0.8]`,
+  `[звук 0.7]`, `[темп 4.2]` и просит только номера. Выбор LLM объединяется с
+  эвристикой (LLM +12 к баллу), поэтому один плохой ответ не ломает результат.
 
 ## 7. Что проверено, а что нет
 

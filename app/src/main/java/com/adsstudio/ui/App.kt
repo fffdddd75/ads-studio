@@ -213,7 +213,7 @@ private fun ModelsHint(llmEnabled: Boolean, vlmEnabled: Boolean) {
         Spacer(Modifier.width(6.dp))
         Text(
             text = when {
-                vlmEnabled -> "Первый раз: Vosk 45 МБ + видео-ИИ 2,6 ГБ. Дальше — офлайн."
+                vlmEnabled -> "Первый раз: Vosk 45 МБ + видео-ИИ 2,6 ГБ. Нужно ~3,5 ГБ свободной памяти."
                 llmEnabled -> "Первый раз: Vosk 45 МБ + Qwen 520 МБ. Дальше — офлайн."
                 else -> "Первый раз: Vosk 45 МБ. Дальше — офлайн."
             },

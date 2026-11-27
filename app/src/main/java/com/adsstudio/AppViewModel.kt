@@ -1,5 +1,6 @@
 package com.adsstudio
 
+import android.app.ActivityManager
 import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
@@ -128,16 +129,40 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 asrMs = SystemClock.elapsedRealtime() - asrStarted
-                wav.delete()
 
-                val candidates = ClipPicker.candidates(utterances, 10)
-                var clips = ClipPicker.pickFromCandidates(candidates, 5)
+                _state.update { it.copy(busy = "Смотрю кадры и слушаю звук…", progress = null) }
+                val durationMs = _state.value.info?.durationMs ?: 0L
+                val candidates = ClipPicker.candidates(utterances, 16, durationMs)
+                val audio = withContext(Dispatchers.IO) {
+                    runCatching { AudioFeatures.analyze(wav, candidates) }
+                        .getOrDefault(List<AudioHint?>(candidates.size) { null })
+                }
+                val visual = withContext(Dispatchers.IO) {
+                    runCatching { VisualHints.analyzeScores(app, uri, candidates) }
+                        .getOrDefault(List<VisualHint?>(candidates.size) { null })
+                }
+                wav.delete()
+                val ranked = ClipPicker.rescore(candidates, durationMs, audio, visual)
+                var clips = ClipPicker.fillSelection(
+                    ClipPicker.pickFromCandidates(ranked, 5),
+                    ranked,
+                    5
+                )
                 var notice: String? = null
                 var llmReady = llmModels.isReady()
                 var vlmReady = vlmModels.isReady()
 
-                if (_state.value.llmEnabled && candidates.size >= 3) {
-                    if (_state.value.vlmEnabled) {
+                if (_state.value.llmEnabled && ranked.size >= 3) {
+                    val wantVlm = _state.value.vlmEnabled
+                    val vlmAllowed = wantVlm && hasEnoughMemoryForVlm(app)
+                    if (wantVlm && !vlmAllowed) {
+                        prefs.edit().putBoolean("vlm_enabled", false).apply()
+                        _state.update { it.copy(vlmEnabled = false) }
+                        notice = "Для видео-ИИ нужно ~3,5 ГБ свободной памяти. " +
+                            "Выбрал быстрой моделью."
+                    }
+
+                    if (vlmAllowed) {
                         try {
                             _state.update {
                                 it.copy(
@@ -170,7 +195,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                     it.copy(busy = "Смотрю кадры и выбираю моменты…", progress = null)
                                 }
 
-                                val pool = ClipPicker.pickFromCandidates(candidates, 6)
+                                val pool = ClipPicker.pickFromCandidates(ranked, 6)
                                 val aiStarted = SystemClock.elapsedRealtime()
                                 val indices = withContext(Dispatchers.IO) {
                                     VlmClipSelector.select(
@@ -197,9 +222,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
                                 if (indices.isNotEmpty()) {
                                     val selected = indices.mapNotNull { pool.getOrNull(it - 1) }
-                                    clips = ClipPicker.fillSelection(selected, candidates, 5)
+                                    clips = ClipPicker.fillSelection(selected, ranked, 5)
                                 } else {
-                                    notice = "Видео-ИИ не ответил номерами — выбрал по эвристике."
+                                    notice = "Видео-ИИ не ответил номерами — выбрал по смыслу и звуку."
                                 }
                             }
                         } catch (error: Throwable) {
@@ -216,7 +241,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             if (llmModels.isReady()) {
                                 try {
                                     val aiStarted = SystemClock.elapsedRealtime()
-                                    clips = chooseWithFastLlm(app, uri, candidates) { text ->
+                                    clips = chooseWithFastLlm(app, ranked) { text ->
                                         notice = text
                                     }
                                     aiMs = SystemClock.elapsedRealtime() - aiStarted
@@ -231,7 +256,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     } else {
                         try {
                             val aiStarted = SystemClock.elapsedRealtime()
-                            clips = chooseWithFastLlm(app, uri, candidates) { text ->
+                            clips = chooseWithFastLlm(app, ranked) { text ->
                                 notice = text
                             }
                             aiMs = SystemClock.elapsedRealtime() - aiStarted
@@ -282,7 +307,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun chooseWithFastLlm(
         app: Application,
-        uri: Uri,
         candidates: List<SuggestedClip>,
         onNotice: (String) -> Unit
     ): List<SuggestedClip> {
@@ -303,7 +327,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update {
             it.copy(
                 llmReady = true,
-                busy = "Смотрю кадры и выбираю моменты…",
+                busy = "Выбираю моменты по смыслу и звуку…",
                 progress = null
             )
         }
@@ -311,24 +335,31 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return LocalLlm(app).use { llm ->
             withContext(Dispatchers.IO) { llm.load(modelPath) }
 
-            val hints: Map<Int, String> = withContext(Dispatchers.IO) {
-                runCatching {
-                    VisualHints.analyze(app, uri, candidates)
-                }.getOrDefault(emptyMap())
-            }
-
-            val prompt = LlmClipSelector.prompt(candidates, 5, hints)
+            val pool = ClipPicker.pickFromCandidates(candidates, 8)
+            val prompt = LlmClipSelector.prompt(pool, 5)
             val response = withContext(Dispatchers.Default) {
                 llm.generate(prompt)
             }
-            val indices = LlmClipSelector.parse(response, candidates.size, 5)
+            val indices = LlmClipSelector.parse(response, pool.size, 5)
             if (indices.isEmpty()) {
-                onNotice("Нейросеть не ответила номерами — выбрал по эвристике.")
-                ClipPicker.pickFromCandidates(candidates, 5)
-            } else {
-                val selected = indices.mapNotNull { candidates.getOrNull(it - 1) }
-                ClipPicker.fillSelection(selected, candidates, 5)
+                onNotice("Нейросеть не ответила номерами — выбрал по смыслу и звуку.")
+                return@use ClipPicker.pickFromCandidates(candidates, 5)
             }
+
+            val llmSelected = indices.mapNotNull { pool.getOrNull(it - 1) }
+            val heuristic = ClipPicker.pickFromCandidates(candidates, 5)
+            val combined = (llmSelected.map { it to (it.score + 12f) } + heuristic.map { it to it.score })
+                .sortedByDescending { it.second }
+                .map { it.first }
+                .distinctBy { it.startMs to it.endMs }
+
+            val selected = mutableListOf<SuggestedClip>()
+            for (clip in combined) {
+                if (selected.size >= 5) break
+                if (selected.any { it.startMs < clip.endMs && clip.startMs < it.endMs }) continue
+                selected += clip
+            }
+            ClipPicker.fillSelection(selected, candidates, 5)
         }
     }
 
@@ -476,6 +507,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update {
             it.copy(busy = null, progress = null, notice = "Остановлено")
         }
+    }
+
+    private fun hasEnoughMemoryForVlm(context: Context): Boolean {
+        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+            ?: return false
+        val info = ActivityManager.MemoryInfo()
+        manager.getMemoryInfo(info)
+        return info.availMem >= 3_800L * 1024 * 1024
     }
 
     private fun timingText(totalMs: Long, asrMs: Long, modelMs: Long, aiMs: Long): String {

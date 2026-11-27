@@ -1,11 +1,16 @@
 package com.adsstudio
 
 import kotlin.math.abs
+import kotlin.math.log
 
 /**
  * Кандидаты для нарезки. Границы привязаны к паузам в речи,
  * а финальный выбор делает локальная LLM (LlmClipSelector).
  * Если LLM выключена или не справилась — остаётся эвристика.
+ *
+ * Важно: это не «тыканье пальцем». Кандидат получает баллы за смысл текста
+ * (событие, конфликт, польза, вопрос), за громкость и плотность речи,
+ * за движение в кадре. Вступления, прощания и реклама штрафуются.
  */
 object ClipPicker {
 
@@ -22,11 +27,46 @@ object ClipPicker {
         "батаре", "интернет", "вайфай", "сигнал", "камер", "фото", "видео"
     )
 
+    private val eventWords = listOf(
+        "вдруг", "внезапно", "неожиданно", "в этот момент", "вот что произошло",
+        "машина выскочила", "машинка выскочила", "машина", "машинка", "автомобиль",
+        "выскочил", "выскочила", "вылетел", "вылетела", "врезался", "врезалась",
+        "столкнулся", "столкнулась",
+        "упал", "сломался", "взорвался", "загорелся", "поймал", "спас", "потерял",
+        "нашёл", "нашел", "украли", "обманул", "кинул", "провал", "успел", "чудом",
+        "опасно", "жёстко", "жестко", "жесть", "шок", "смотри", "представь",
+        "оказалось", "на самом деле", "впервые", "эксперимент", "тест", "проверил",
+        "результат", "сравнил", "сработало", "не сработало", "получилось"
+    )
+
+    private val valueWords = listOf(
+        "главное", "важно", "запомни", "никогда", "всегда", "нельзя", "нужно",
+        "правильно", "ошибка", "решение", "причина", "смысл", "совет", "лайфхак",
+        "секрет", "бесплатно", "выгодно", "быстро", "просто", "сложно", "польза"
+    )
+
     private val emotionWords = listOf(
         "круто", "жесть", "шок", "ошибк", "провал", "секрет", "деньг", "бесплатн",
         "лучш", "худш", "ненавиж", "любл", "боюсь", "опасн", "важн", "срочн",
         "наконец", "представь", "смотри", "внимание", "правда", "обман", "развод",
-        "спаса", "убива", "взорв", "скандал"
+        "спаса", "убива", "взорв", "скандал", "смешно", "страшно", "обидно"
+    )
+
+    private val introPatterns = listOf(
+        "всем привет", "привет", "добро пожаловать", "сегодня", "в этом видео",
+        "на связи", "меня зовут", "итак", "поехали", "начнём", "начнем", "давайте",
+        "друзья", "здравствуйте"
+    )
+
+    private val outroPatterns = listOf(
+        "подписывайтесь", "ставьте лайк", "спасибо за просмотр", "до встречи",
+        "в следующем видео", "на канал", "реклама", "спонсор", "промокод",
+        "ссылке в описании", "ссылке в описании"
+    )
+
+    private val questionWords = listOf(
+        "почему", "зачем", "как", "когда", "где", "кто", "чем", "чего", "сколько",
+        "какой", "какая", "какие", "можно", "стоит", "правда", "что"
     )
 
     private val stopWords = setOf(
@@ -79,11 +119,15 @@ object ClipPicker {
 
     /** Эвристический выбор — запасной вариант и основа для кандидатов. */
     fun pick(utterances: List<Utterance>, maxClips: Int = 5): List<SuggestedClip> =
-        selectDiverse(buildCandidates(buildUnits(utterances)), maxClips)
+        selectDiverse(buildCandidates(buildUnits(utterances), 0L), maxClips)
 
     /** Кандидаты для LLM: интересные, не пересекаются, разбросаны по видео. */
-    fun candidates(utterances: List<Utterance>, limit: Int = 12): List<SuggestedClip> =
-        selectDiverse(buildCandidates(buildUnits(utterances)), limit)
+    fun candidates(
+        utterances: List<Utterance>,
+        limit: Int = 12,
+        totalDurationMs: Long = 0L
+    ): List<SuggestedClip> =
+        selectDiverse(buildCandidates(buildUnits(utterances), totalDurationMs), limit)
 
     fun pickFromCandidates(candidates: List<SuggestedClip>, maxClips: Int = 5): List<SuggestedClip> =
         selectDiverse(candidates, maxClips)
@@ -102,6 +146,48 @@ object ClipPicker {
             result += candidate
         }
         return result.sortedBy { it.startMs }
+    }
+
+    /**
+     * Второй проход, когда уже известны звук и картинка.
+     * audio/visual — списки той же длины, что candidates; null = признака нет.
+     */
+    fun rescore(
+        candidates: List<SuggestedClip>,
+        totalDurationMs: Long,
+        audio: List<AudioHint?>,
+        visual: List<VisualHint?>
+    ): List<SuggestedClip> {
+        if (candidates.isEmpty()) return emptyList()
+
+        val docs = candidates.map { contentWords(it.text).toSet() }
+        val documentFrequency = mutableMapOf<String, Int>()
+        docs.forEach { words ->
+            words.forEach { word ->
+                documentFrequency[word] = (documentFrequency[word] ?: 0) + 1
+            }
+        }
+        val total = candidates.size.toDouble()
+
+        return candidates.mapIndexed { index, clip ->
+            val specificity = docs[index].sumOf { word ->
+                log(total / (1.0 + (documentFrequency[word] ?: 0)))
+            }.toFloat()
+
+            clip.copy(
+                score = scoreText(
+                    text = clip.text,
+                    duration = clip.endMs - clip.startMs,
+                    startMs = clip.startMs,
+                    totalDurationMs = totalDurationMs,
+                    audio = audio.getOrNull(index),
+                    visual = visual.getOrNull(index),
+                    specificity = specificity
+                ),
+                audio = audio.getOrNull(index),
+                visual = visual.getOrNull(index)
+            )
+        }
     }
 
     private fun buildUnits(utterances: List<Utterance>): List<Unit> {
@@ -126,7 +212,7 @@ object ClipPicker {
         return units
     }
 
-    private fun buildCandidates(units: List<Unit>): List<SuggestedClip> {
+    private fun buildCandidates(units: List<Unit>, totalDurationMs: Long): List<SuggestedClip> {
         val candidates = mutableListOf<SuggestedClip>()
 
         for (i in units.indices) {
@@ -154,12 +240,43 @@ object ClipPicker {
             if (duration !in 8_000L..60_000L) continue
 
             val text = texts.joinToString(" ")
+            // Не отдаём в кандидаты чистое вступление в первые 8 секунд.
+            if (units[startIndex].startMs < 8_000 && isIntroOnly(text)) continue
+
             candidates += SuggestedClip(
                 startMs = units[startIndex].startMs,
                 endMs = end,
                 title = titleOf(texts),
                 text = text,
-                score = scoreText(text, duration)
+                score = scoreText(
+                    text = text,
+                    duration = duration,
+                    startMs = units[startIndex].startMs,
+                    totalDurationMs = totalDurationMs
+                )
+            )
+        }
+
+        // Вопрос + ответ — сильный крючок для Shorts, даже если ответ не влез в 18 секунд.
+        for (i in 0 until units.size - 1) {
+            val question = units[i]
+            val answer = units[i + 1]
+            if (!isQuestion(question.text)) continue
+            if (answer.startMs - question.endMs > 900) continue
+            val duration = answer.endMs - question.startMs
+            if (duration !in 8_000L..60_000L) continue
+            val text = question.text + " " + answer.text
+            candidates += SuggestedClip(
+                startMs = question.startMs,
+                endMs = answer.endMs,
+                title = titleOf(listOf(question.text, answer.text)),
+                text = text,
+                score = scoreText(
+                    text = text,
+                    duration = duration,
+                    startMs = question.startMs,
+                    totalDurationMs = totalDurationMs
+                )
             )
         }
 
@@ -174,6 +291,7 @@ object ClipPicker {
             if (chosen.size >= limit) break
             if (chosen.any { it.startMs < candidate.endMs && candidate.startMs < it.endMs }) continue
             if (chosen.any { abs(it.startMs - candidate.startMs) < 20_000 }) continue
+            if (chosen.any { textSimilarity(it.text, candidate.text) >= 0.72 }) continue
             chosen += candidate
         }
 
@@ -189,14 +307,105 @@ object ClipPicker {
         return chosen.sortedBy { it.startMs }
     }
 
-    private fun scoreText(text: String, duration: Long): Float {
+    private fun scoreText(
+        text: String,
+        duration: Long,
+        startMs: Long = 0L,
+        totalDurationMs: Long = 0L,
+        audio: AudioHint? = null,
+        visual: VisualHint? = null,
+        specificity: Float = 0f
+    ): Float {
         val lower = text.lowercase()
-        val hits = hooks.count { lower.contains(it) }
-        val emotions = emotionWords.count { lower.contains(it) }
-        val questions = if (text.contains("?")) 2 else 0
+        val words = cleanWords(text)
+
+        val hookHits = hooks.count { lower.contains(it) }
+        val eventHits = eventWords.count { lower.contains(it) }
+        val valueHits = valueWords.count { lower.contains(it) }
+        val emotionHits = emotionWords.count { lower.contains(it) }
+        val question = if (
+            lower.contains("?") ||
+            words.any { word -> questionWords.any { word.startsWith(it) } }
+        ) 1 else 0
         val numbers = Regex("\\d").findAll(text).count().coerceAtMost(3)
-        return hits * 10f + emotions * 4f + questions * 6f + numbers * 2f -
-            abs(duration - 30_000).toFloat() / 1500f
+        val fillerCount = words.count { it in fillers }
+        val speechRate = if (duration > 0) words.size / (duration / 1000.0) else 0.0
+
+        val introPenalty = if (
+            startMs < 15_000 && introPatterns.any { lower.contains(it) }
+        ) 35f else 0f
+        val outroPenalty = if (
+            totalDurationMs > 0 &&
+            startMs > totalDurationMs - 20_000 &&
+            outroPatterns.any { lower.contains(it) }
+        ) 40f else 0f
+        val startPenalty = when {
+            startMs < 5_000 -> 18f
+            startMs < 10_000 -> 10f
+            else -> 0f
+        }
+        val endPenalty = if (
+            totalDurationMs > 0 && startMs > totalDurationMs - 15_000
+        ) 8f else 0f
+        val fillerPenalty = fillerCount * 3f
+        val densityPenalty = if (speechRate < 1.2) {
+            ((1.2 - speechRate) * 15.0).toFloat()
+        } else 0f
+        val durationPenalty = abs(duration - 28_000).toFloat() / 2000f
+        val continuationPenalty =
+            (if (startsWithContinuation(text)) 8f else 0f) +
+                (if (endsWithContinuation(text)) 6f else 0f)
+
+        val audioBonus = (audio?.energy ?: 0f) * 14f - (audio?.silence ?: 0f) * 12f
+        val motionBonus = (visual?.score ?: 0f) * 8f
+        val specificityBonus = specificity * 3f
+
+        return hookHits * 10f +
+            eventHits * 14f +
+            valueHits * 8f +
+            emotionHits * 4f +
+            question * 6f +
+            numbers * 2f +
+            audioBonus +
+            motionBonus +
+            specificityBonus -
+            introPenalty -
+            outroPenalty -
+            startPenalty -
+            endPenalty -
+            fillerPenalty -
+            densityPenalty -
+            durationPenalty -
+            continuationPenalty
+    }
+
+    private fun textSimilarity(a: String, b: String): Double {
+        val left = contentWords(a).toSet()
+        val right = contentWords(b).toSet()
+        if (left.isEmpty() || right.isEmpty()) return 0.0
+        val intersection = left.count { it in right }
+        return intersection.toDouble() / (left.size + right.size - intersection).coerceAtLeast(1)
+    }
+
+    private fun contentWords(text: String): List<String> =
+        cleanWords(text).filter { it.length > 2 && it !in stopWords }
+
+    private fun isIntroOnly(text: String): Boolean {
+        val lower = text.lowercase()
+        return introPatterns.any { lower.contains(it) } && !hasStrongHook(text)
+    }
+
+    private fun hasStrongHook(text: String): Boolean {
+        val lower = text.lowercase()
+        return eventWords.any { lower.contains(it) } ||
+            hooks.any { lower.contains(it) } ||
+            emotionWords.any { lower.contains(it) }
+    }
+
+    private fun isQuestion(text: String): Boolean {
+        if (text.contains("?")) return true
+        val first = cleanWords(text).firstOrNull() ?: return false
+        return questionWords.any { first.startsWith(it) }
     }
 
     private fun startsWithContinuation(text: String): Boolean {
@@ -268,14 +477,18 @@ object ClipPicker {
             .filter { it.length > 1 || it in oneLetterAllowed }
 
     private fun utteranceScore(words: List<String>): Float {
-        val hits = words.count { word -> hooks.any { word.startsWith(it) } }
+        val hits = words.count { word ->
+            hooks.any { word.startsWith(it) } || eventWords.any { word.startsWith(it) }
+        }
         val content = words.count { it !in stopWords }
         val lengthPenalty = abs(words.size - 8) * 0.6f
         return hits * 10f + content * 1.3f - lengthPenalty
     }
 
     private fun findStart(words: List<String>): Int {
-        val hookIndex = words.indexOfFirst { word -> hooks.any { word.startsWith(it) } }
+        val hookIndex = words.indexOfFirst { word ->
+            hooks.any { word.startsWith(it) } || eventWords.any { word.startsWith(it) }
+        }
         if (hookIndex >= 0) {
             val before = hookIndex - 1
             val usefulBefore = before >= 0 &&

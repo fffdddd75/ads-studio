@@ -11,45 +11,71 @@ import kotlin.math.abs
  * выдёргивает несколько кадров из каждого кандидата и сравнивает их.
  * Если картинка меняется — в кадре что-то происходит, а не говорящая голова.
  */
+data class VisualHint(
+    val score: Float,
+    val cuts: Int,
+    val label: String
+)
+
 object VisualHints {
 
-    private val fractions = listOf(0.15, 0.5, 0.85)
+    private val fractions = listOf(0.18, 0.5, 0.82)
 
-    fun analyze(context: Context, uri: Uri, clips: List<SuggestedClip>): Map<Int, String> {
-        if (clips.isEmpty()) return emptyMap()
+    /** Возвращает список той же длины, что и clips: null — кадры не удалось прочитать. */
+    fun analyzeScores(
+        context: Context,
+        uri: Uri,
+        clips: List<SuggestedClip>
+    ): List<VisualHint?> {
+        if (clips.isEmpty()) return emptyList()
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(context, uri)
-            clips.mapIndexedNotNull { index, clip ->
-                val frames = fractions.mapNotNull { fraction ->
-                    val timeMs = clip.startMs + ((clip.endMs - clip.startMs) * fraction).toLong()
-                    runCatching {
-                        retriever.getFrameAtTime(
-                            timeMs * 1000,
-                            MediaMetadataRetriever.OPTION_CLOSEST_SYNC
-                        )
-                    }.getOrNull()
-                }
-                if (frames.size < 2) return@mapIndexedNotNull null
-
-                val signatures = frames.map { signature(it) }
-                frames.forEach { it.recycle() }
-
-                val diff = signatures.zipWithNext()
-                    .sumOf { (a, b) -> distance(a, b) } / (signatures.size - 1)
-
-                val hint = when {
-                    diff >= 28 -> "динамично, картинка меняется"
-                    diff >= 12 -> "умеренное движение"
-                    else -> "статичный кадр, говорящая голова"
-                }
-                index to hint
-            }.toMap()
+            clips.map { clip -> analyzeClip(retriever, clip) }
         } catch (_: Throwable) {
-            emptyMap()
+            List(clips.size) { null }
         } finally {
             runCatching { retriever.release() }
         }
+    }
+
+    fun analyze(
+        context: Context,
+        uri: Uri,
+        clips: List<SuggestedClip>
+    ): Map<Int, String> = analyzeScores(context, uri, clips)
+        .mapIndexedNotNull { index, hint -> hint?.let { index to it.label } }
+        .toMap()
+
+    private fun analyzeClip(retriever: MediaMetadataRetriever, clip: SuggestedClip): VisualHint? {
+        val frames = fractions.mapNotNull { fraction ->
+            val timeMs = clip.startMs + ((clip.endMs - clip.startMs) * fraction).toLong()
+            runCatching {
+                retriever.getFrameAtTime(
+                    timeMs * 1000,
+                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+                )
+            }.getOrNull()
+        }
+        if (frames.size < 2) {
+            frames.forEach { it.recycle() }
+            return null
+        }
+
+        val signatures = frames.map { signature(it) }
+        frames.forEach { it.recycle() }
+
+        val diffs = signatures.zipWithNext().map { (a, b) -> distance(a, b) }
+        val diff = if (diffs.isEmpty()) 0f else diffs.average().toFloat()
+        val score = (diff / 45f).coerceIn(0f, 1f)
+        val cuts = diffs.count { it >= 35 }
+
+        val label = when {
+            cuts >= 2 || score >= 0.6f -> "динамично, есть склейки"
+            score >= 0.25f -> "умеренное движение"
+            else -> "статично, говорящая голова"
+        }
+        return VisualHint(score, cuts, label)
     }
 
     private fun signature(bitmap: Bitmap): IntArray {

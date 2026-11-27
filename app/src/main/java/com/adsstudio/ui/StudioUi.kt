@@ -550,9 +550,9 @@ fun AiCard(
                 Spacer(Modifier.height(3.dp))
                 Text(
                     when {
-                        vlmEnabled && vlmReady -> "Qwen2.5-VL · 3B · модель скачана"
-                        vlmEnabled -> "Qwen2.5-VL · 3B · ${VlmModelManager.TOTAL_LABEL} скачается один раз"
-                        enabled -> "Qwen 2.5 · 0.5B · быстрый режим"
+                        vlmEnabled && vlmReady -> "Qwen2.5-VL · 3B · нужно ~3,5 ГБ"
+                        vlmEnabled -> "Qwen2.5-VL · 3B · ${VlmModelManager.TOTAL_LABEL} · нужно ~3,5 ГБ"
+                        enabled -> "Qwen 2.5 · 0.5B · рекомендуется"
                         else -> "Выключена · нарезка по эвристике"
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -561,9 +561,9 @@ fun AiCard(
                 Spacer(Modifier.height(6.dp))
                 Text(
                     if (vlmEnabled) {
-                        "Смотрит кадры и выбирает 5 сильных моментов. Экспериментально."
+                        "Смотрит кадры. Требует ~3,5 ГБ свободной памяти, может не хватить."
                     } else {
-                        "Выбирает 5 сильных моментов по смыслу и движению в кадре."
+                        "Выбирает по смыслу текста, звуку и движению. Без тяжёлой видеомодели."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = StudioColors.TextDim
