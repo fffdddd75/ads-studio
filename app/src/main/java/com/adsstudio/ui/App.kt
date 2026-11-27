@@ -278,7 +278,7 @@ private fun ProjectContent(
         }
 
         Reveal(4) {
-            ActionSection(state = state, onRun = vm::transcribe)
+            ActionSection(state = state, onRun = vm::transcribe, onCancel = vm::cancelAnalysis)
         }
 
         state.notice?.let { notice ->
@@ -392,7 +392,8 @@ private fun FormatSection(
 @Composable
 private fun ActionSection(
     state: UiState,
-    onRun: () -> Unit
+    onRun: () -> Unit,
+    onCancel: () -> Unit
 ) {
     val hasTranscript = state.transcript.isNotEmpty()
 
@@ -434,7 +435,7 @@ private fun ActionSection(
             ProcessingCard(
                 busy = busy,
                 progress = state.progress,
-                onCancel = vm::cancelAnalysis
+                onCancel = onCancel
             )
         }
     }
