@@ -255,13 +255,31 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
             // Второй агент: редактор отвечает на вопросы и выбирает номера.
             _state.update { it.copy(busy = "Редактор отвечает и выбирает…") }
-            val response = withContext(Dispatchers.Default) {
+            var response = withContext(Dispatchers.Default) {
                 (editorLlm ?: critic).generate(LlmClipSelector.editorPrompt(pool, 5, questions))
             }
 
-            val indices = LlmClipSelector.parseEditorChoice(response, pool.size, 5)
+            var indices = LlmClipSelector.parseEditorChoice(response, pool.size, 5)
                 .ifEmpty { LlmClipSelector.parseLooseChoice(response, pool.size, 5) }
                 .ifEmpty { LlmClipSelector.parse(response, pool.size, 5) }
+
+            // Если редактор не дал номеров, пробуем короткий одношаговый запрос:
+            // маленькой модели так проще, а результат всё равно смешается с эвристикой.
+            if (indices.isEmpty()) {
+                _state.update {
+                    it.copy(busy = "Редактор не ответил — пробую короткий запрос…")
+                }
+                val fallback = withContext(Dispatchers.Default) {
+                    (editorLlm ?: critic).generate(LlmClipSelector.prompt(pool, 5))
+                }
+                val fallbackIndices = LlmClipSelector.parse(fallback, pool.size, 5)
+                    .ifEmpty { LlmClipSelector.parseLooseChoice(fallback, pool.size, 5) }
+                if (fallbackIndices.isNotEmpty()) {
+                    response = fallback
+                    indices = fallbackIndices
+                }
+            }
+
             if (indices.isEmpty()) {
                 onNotice("Агенты не дали номеров — выбрал по смыслу и звуку.")
                 ClipPicker.pickFromCandidates(candidates, 5)
