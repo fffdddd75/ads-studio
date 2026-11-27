@@ -6,7 +6,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.Paint
-import android.graphics.RectF
 import android.graphics.Typeface
 import android.media.MediaMetadataRetriever
 import android.net.Uri
@@ -16,15 +15,29 @@ import java.util.Locale
 import kotlin.math.max
 
 /**
- * Готовит коллажи кадров и просит Qwen2.5-VL выбрать сильные фрагменты.
+ * Готовит два общих коллажа кадров и просит Qwen2.5-VL выбрать сильные фрагменты.
+ * Первый лист — начало всех фрагментов, второй — конец. Итого 12 кадров на 6
+ * кандидатов: по 6 кадров на лист, поэтому каждая ячейка крупнее, чем раньше.
  */
 object VlmClipSelector {
 
-    private const val SHEET_W = 640
-    private const val SHEET_H = 360
-    private const val CELL_W = 320
-    private const val CELL_H = 180
-    private val fractions = listOf(0.12, 0.5, 0.88)
+    private const val SHEET_W = 1280
+    private const val SHEET_H = 720
+    private const val HEADER_H = 44
+    private const val COLS = 3
+    private const val ROWS = 2
+    private const val CELL_W = SHEET_W / COLS          // 426
+    private const val CELL_H = (SHEET_H - HEADER_H) / ROWS  // 338
+    private const val PAD = 6
+    private const val LABEL_H = 44
+    private const val FRAME_W = CELL_W - PAD * 2       // 414
+    private const val FRAME_H = CELL_H - LABEL_H - PAD // 288
+
+    // Два момента на фрагмент: начало и конец.
+    private val moments = listOf(
+        0.12 to "начало",
+        0.88 to "конец"
+    )
 
     fun select(
         context: Context,
@@ -39,11 +52,16 @@ object VlmClipSelector {
         try {
             val parts = mutableListOf<VlmPart>()
             parts += VlmPart(text = intro(candidates.size, maxClips))
-            candidates.forEachIndexed { index, clip ->
-                parts += VlmPart(text = candidateText(index, clip))
-                sheets.getOrNull(index)?.let { sheet ->
-                    parts += VlmPart(imageBase64 = encode(sheet))
-                }
+            parts += VlmPart(text = candidatesText(candidates))
+            sheets.forEachIndexed { index, sheet ->
+                parts += VlmPart(
+                    text = if (index == 0) {
+                        "Коллаж 1 — кадры в начале фрагментов."
+                    } else {
+                        "Коллаж 2 — кадры в конце фрагментов."
+                    }
+                )
+                parts += VlmPart(imageBase64 = encode(sheet))
             }
             parts += VlmPart(
                 text = "Ответь только номерами через запятую, от лучшего к худшему. " +
@@ -58,16 +76,19 @@ object VlmClipSelector {
     }
 
     private fun intro(count: Int, maxClips: Int): String =
-        "Ниже $count фрагментов одного видео. На каждом коллаже три кадра: начало, " +
-            "середина и конец. В четвёртой ячейке — номер фрагмента и таймкод.\n" +
+        "Ниже два коллажа одного видео, по ${count.coerceAtMost(COLS * ROWS)} фрагментов " +
+            "на каждом. Первый коллаж — начало фрагментов, второй — конец. Номера " +
+            "фрагментов на обоих коллажах совпадают, в каждой ячейке подписаны номер и таймкод.\n" +
             "Выбери $maxClips самых интересных для коротких видео (Shorts/Reels): " +
             "действие, эмоция, конфликт, интрига, польза, неожиданность.\n" +
             "Избегай: статичная говорящая голова, приветствие, вода, реклама, " +
             "перечисление без мысли."
 
-    private fun candidateText(index: Int, clip: SuggestedClip): String {
-        val text = clip.text.replace(Regex("\\s+"), " ").take(300)
-        return "Фрагмент ${index + 1} (${time(clip.startMs)}–${time(clip.endMs)}): $text"
+    private fun candidatesText(candidates: List<SuggestedClip>): String {
+        return candidates.take(COLS * ROWS).mapIndexed { index, clip ->
+            "Фрагмент ${index + 1} (${time(clip.startMs)}–${time(clip.endMs)}): " +
+                clip.text.replace(Regex("\\s+"), " ").take(220)
+        }.joinToString("\n")
     }
 
     fun parse(response: String, candidateCount: Int, maxClips: Int): List<Int> {
@@ -89,53 +110,161 @@ object VlmClipSelector {
         onProgress: (Float) -> Unit
     ): List<Bitmap> {
         val retriever = MediaMetadataRetriever()
-        val sheets = ArrayList<Bitmap>(candidates.size)
+        val sheets = ArrayList<Bitmap>(moments.size)
         try {
             retriever.setDataSource(context, uri)
             val rotation = retriever
                 .extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
                 ?.toIntOrNull() ?: 0
 
-            candidates.forEachIndexed { index, clip ->
+            val count = candidates.size.coerceAtMost(COLS * ROWS)
+            if (count == 0) return emptyList()
+            val total = count * moments.size
+            var done = 0
+
+            moments.forEachIndexed { momentIndex, moment ->
+                val fraction = moment.first
+                val label = moment.second
+
                 val sheet = Bitmap.createBitmap(SHEET_W, SHEET_H, Bitmap.Config.ARGB_8888)
+                sheets += sheet
                 val canvas = Canvas(sheet)
                 canvas.drawColor(Color.rgb(12, 12, 16))
+                drawHeader(canvas, momentIndex, moments.size, label, count)
 
-                val frames = fractions.mapNotNull { fraction ->
+                for (index in 0 until count) {
+                    val clip = candidates[index]
+                    val cellX = (index % COLS) * CELL_W
+                    val cellY = HEADER_H + (index / COLS) * CELL_H
+
                     val timeMs = clip.startMs + ((clip.endMs - clip.startMs) * fraction).toLong()
-                    runCatching {
+                    val frame = runCatching {
                         retriever.getFrameAtTime(
                             timeMs * 1000,
                             MediaMetadataRetriever.OPTION_CLOSEST_SYNC
                         )
                     }.getOrNull()
-                }
 
-                val slots = listOf(0 to 0, CELL_W to 0, 0 to CELL_H)
-                slots.forEachIndexed { slot, (x, y) ->
-                    val frame = frames.getOrNull(slot)
                     if (frame == null) {
-                        drawMissing(canvas, x, y)
+                        drawMissing(canvas, cellX + PAD, cellY + PAD)
                     } else {
                         val rotated = rotate(frame, rotation)
-                        val cropped = centerCrop(rotated, CELL_W, CELL_H)
-                        canvas.drawBitmap(cropped, x.toFloat(), y.toFloat(), null)
+                        val cropped = centerCrop(rotated, FRAME_W, FRAME_H)
+                        canvas.drawBitmap(
+                            cropped,
+                            (cellX + PAD).toFloat(),
+                            (cellY + PAD).toFloat(),
+                            null
+                        )
                         if (cropped !== rotated) cropped.recycle()
                         if (rotated !== frame) rotated.recycle()
                         frame.recycle()
-                        drawFrameLabel(canvas, x, y, (slot + 1).toString())
                     }
-                }
 
-                drawInfo(canvas, index + 1, clip)
-                drawGrid(canvas)
-                sheets += sheet
-                onProgress((index + 1).toFloat() / candidates.size.toFloat())
+                    drawCellLabel(canvas, cellX, cellY + PAD + FRAME_H, index + 1, clip)
+                    drawCellBorder(canvas, cellX, cellY)
+
+                    done++
+                    onProgress(done.toFloat() / total.toFloat())
+                }
             }
+        } catch (e: Exception) {
+            // Не роняем анализ: отправим те листы, которые успели собрать.
         } finally {
             runCatching { retriever.release() }
         }
         return sheets
+    }
+
+    private fun drawHeader(canvas: Canvas, index: Int, total: Int, label: String, count: Int) {
+        val bg = Paint().apply { color = Color.rgb(20, 20, 27) }
+        canvas.drawRect(0f, 0f, SHEET_W.toFloat(), HEADER_H.toFloat(), bg)
+
+        val title = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 24f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        canvas.drawText(
+            "Коллаж ${index + 1} из $total · $label фрагментов · $count шт.",
+            14f,
+            30f,
+            title
+        )
+
+        val line = Paint().apply {
+            color = 0x33FFFFFF.toInt()
+            strokeWidth = 1f
+        }
+        canvas.drawLine(0f, HEADER_H.toFloat(), SHEET_W.toFloat(), HEADER_H.toFloat(), line)
+    }
+
+    private fun drawCellLabel(
+        canvas: Canvas,
+        cellX: Int,
+        stripY: Int,
+        number: Int,
+        clip: SuggestedClip
+    ) {
+        val bg = Paint().apply { color = Color.rgb(22, 22, 30) }
+        canvas.drawRect(
+            cellX.toFloat(),
+            stripY.toFloat(),
+            (cellX + CELL_W).toFloat(),
+            (stripY + LABEL_H).toFloat(),
+            bg
+        )
+
+        val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(255, 122, 61)
+            textSize = 22f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+        }
+        canvas.drawText("Фрагмент $number", cellX + 10f, stripY + 30f, accent)
+
+        val timePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 19f
+            textAlign = Paint.Align.RIGHT
+        }
+        canvas.drawText(
+            "${time(clip.startMs)}–${time(clip.endMs)}",
+            (cellX + CELL_W - 10).toFloat(),
+            stripY + 30f,
+            timePaint
+        )
+    }
+
+    private fun drawMissing(canvas: Canvas, x: Int, y: Int) {
+        val bg = Paint().apply { color = Color.rgb(38, 38, 46) }
+        canvas.drawRect(
+            x.toFloat(),
+            y.toFloat(),
+            (x + FRAME_W).toFloat(),
+            (y + FRAME_H).toFloat(),
+            bg
+        )
+        val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(120, 120, 132)
+            textSize = 20f
+            textAlign = Paint.Align.CENTER
+        }
+        canvas.drawText("нет кадра", x + FRAME_W / 2f, y + FRAME_H / 2f, text)
+    }
+
+    private fun drawCellBorder(canvas: Canvas, cellX: Int, cellY: Int) {
+        val line = Paint().apply {
+            color = 0x33FFFFFF.toInt()
+            strokeWidth = 1f
+            style = Paint.Style.STROKE
+        }
+        canvas.drawRect(
+            cellX.toFloat(),
+            cellY.toFloat(),
+            (cellX + CELL_W).toFloat(),
+            (cellY + CELL_H).toFloat(),
+            line
+        )
     }
 
     private fun rotate(bitmap: Bitmap, degrees: Int): Bitmap {
@@ -162,85 +291,9 @@ object VlmClipSelector {
         return cropped
     }
 
-    private fun drawFrameLabel(canvas: Canvas, x: Int, y: Int, label: String) {
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = 20f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        }
-        val pad = 8f
-        val rect = RectF(
-            x + 8f,
-            y + 8f,
-            x + 8f + paint.measureText(label) + pad * 2,
-            y + 8f + 26f
-        )
-        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x99000000.toInt() }
-        canvas.drawRoundRect(rect, 6f, 6f, bg)
-        canvas.drawText(label, x + 8f + pad, y + 8f + 20f, paint)
-    }
-
-    private fun drawMissing(canvas: Canvas, x: Int, y: Int) {
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(90, 90, 100)
-            textSize = 18f
-            textAlign = Paint.Align.CENTER
-        }
-        canvas.drawText(
-            "нет кадра",
-            x + CELL_W / 2f,
-            y + CELL_H / 2f,
-            paint
-        )
-    }
-
-    private fun drawInfo(canvas: Canvas, number: Int, clip: SuggestedClip) {
-        val bg = Paint().apply { color = Color.rgb(24, 24, 32) }
-        canvas.drawRect(
-            CELL_W.toFloat(),
-            CELL_H.toFloat(),
-            SHEET_W.toFloat(),
-            SHEET_H.toFloat(),
-            bg
-        )
-
-        val accent = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(255, 122, 61)
-            textSize = 30f
-            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        }
-        canvas.drawText("Фрагмент $number", CELL_W + 18f, CELL_H + 44f, accent)
-
-        val timePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
-            textSize = 20f
-        }
-        canvas.drawText(
-            "${time(clip.startMs)}–${time(clip.endMs)}",
-            CELL_W + 18f,
-            CELL_H + 76f,
-            timePaint
-        )
-
-        val hint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.rgb(160, 160, 172)
-            textSize = 16f
-        }
-        canvas.drawText("начало · середина · конец", CELL_W + 18f, CELL_H + 108f, hint)
-    }
-
-    private fun drawGrid(canvas: Canvas) {
-        val line = Paint().apply {
-            color = 0x33FFFFFF
-            strokeWidth = 1f
-        }
-        canvas.drawLine(CELL_W.toFloat(), 0f, CELL_W.toFloat(), SHEET_H.toFloat(), line)
-        canvas.drawLine(0f, CELL_H.toFloat(), SHEET_W.toFloat(), CELL_H.toFloat(), line)
-    }
-
     private fun encode(bitmap: Bitmap): String {
         val out = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 82, out)
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 85, out)
         return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 

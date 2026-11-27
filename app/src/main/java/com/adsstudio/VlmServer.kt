@@ -53,14 +53,14 @@ class VlmServer(private val context: Context) : Closeable {
             server.absolutePath,
             "-m", modelPath,
             "--mmproj", mmprojPath,
-            "-c", "6144",
+            "-c", "4096",
             "-np", "1",
             "-t", "4",
             "--host", "127.0.0.1",
             "--port", port.toString(),
             "--no-webui",
             "--jinja",
-            "--image-max-tokens", "384",
+            "--image-max-tokens", "256",
             "--log-colors", "off"
         )
 
