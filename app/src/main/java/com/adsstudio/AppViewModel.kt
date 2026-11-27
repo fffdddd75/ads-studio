@@ -225,7 +225,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
         val critic = LocalLlm(app)
         var editor: LocalLlm? = null
-        try {
+        return try {
             withContext(Dispatchers.IO) {
                 critic.load(modelPath)
                 if (hasEnoughMemoryForTwoLlm(app)) {
