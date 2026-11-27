@@ -509,12 +509,10 @@ fun NeuralGlyph(modifier: Modifier = Modifier) {
 @Composable
 fun AiCard(
     enabled: Boolean,
-    vlmEnabled: Boolean,
-    vlmReady: Boolean,
+    ready: Boolean,
     onToggle: (Boolean) -> Unit,
-    onVlmToggle: (Boolean) -> Unit,
-    modifier: Modifier = Modifier,
-    interactive: Boolean = true
+    interactive: Boolean,
+    modifier: Modifier = Modifier
 ) {
     val border = Brush.linearGradient(
         listOf(
@@ -539,10 +537,10 @@ fun AiCard(
                             .size(6.dp)
                             .clip(CircleShape)
                             .background(
-                                if (vlmEnabled) {
-                                    if (vlmReady) StudioColors.Green else StudioColors.Violet
+                                if (enabled) {
+                                    if (ready) StudioColors.Green else StudioColors.Violet
                                 } else {
-                                    if (enabled) StudioColors.Green else StudioColors.TextDim
+                                    StudioColors.TextDim
                                 }
                             )
                     )
@@ -550,9 +548,8 @@ fun AiCard(
                 Spacer(Modifier.height(3.dp))
                 Text(
                     when {
-                        vlmEnabled && vlmReady -> "Qwen2.5-VL · 3B · нужно ~3,5 ГБ"
-                        vlmEnabled -> "Qwen2.5-VL · 3B · ${VlmModelManager.TOTAL_LABEL} · нужно ~3,5 ГБ"
-                        enabled -> "Qwen 2.5 · 0.5B · два агента"
+                        enabled && ready -> "2 × Qwen 2.5 · 0.5B · готовы"
+                        enabled -> "2 × Qwen 2.5 · 0.5B · ~1 ГБ в памяти"
                         else -> "Выключена · нарезка по эвристике"
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -560,10 +557,10 @@ fun AiCard(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (vlmEnabled) {
-                        "Смотрит кадры. Требует ~3,5 ГБ свободной памяти, может не хватить."
-                    } else {
+                    if (enabled) {
                         "Критик задаёт вопросы, редактор отвечает и выбирает. Смысл, звук, движение."
+                    } else {
+                        "Включи, чтобы два агента проверили моменты по смыслу и звуку."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = StudioColors.TextDim
@@ -584,92 +581,43 @@ fun AiCard(
             )
         }
 
-        Spacer(Modifier.height(14.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            ModelChip(
-                title = "Быстрая",
-                badge = "0.5B · 520 МБ",
-                selected = !vlmEnabled,
-                enabled = interactive && enabled,
-                onClick = { onVlmToggle(false) },
-                modifier = Modifier.weight(1f)
-            )
-            ModelChip(
-                title = "Видео-ИИ",
-                badge = "3B · ${VlmModelManager.TOTAL_LABEL}",
-                selected = vlmEnabled,
-                enabled = interactive && enabled,
-                onClick = { onVlmToggle(true) },
-                modifier = Modifier.weight(1f)
-            )
+        if (enabled) {
+            Spacer(Modifier.height(14.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AgentTag("Критик", "вопросы")
+                AgentTag("Редактор", "выбор")
+            }
         }
     }
 }
 
 @Composable
-private fun ModelChip(
-    title: String,
-    badge: String,
-    selected: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val shape = RoundedCornerShape(12.dp)
-    val borderColor by animateColorAsState(
-        targetValue = if (selected) StudioColors.Cyan.copy(alpha = 0.65f)
-        else StudioColors.BorderSoft,
-        animationSpec = tween(180),
-        label = "modelChipBorder"
-    )
-    val background by animateColorAsState(
-        targetValue = if (selected) StudioColors.Cyan.copy(alpha = 0.10f)
-        else StudioColors.SurfaceHigh.copy(alpha = 0.45f),
-        animationSpec = tween(180),
-        label = "modelChipBg"
-    )
+private fun AgentTag(title: String, subtitle: String) {
     Row(
-        modifier = modifier
-            .clip(shape)
-            .background(background)
-            .border(1.dp, borderColor, shape)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 9.dp),
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(StudioColors.SurfaceHigh.copy(alpha = 0.45f))
+            .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
             Modifier
-                .size(6.dp)
+                .size(5.dp)
                 .clip(CircleShape)
-                .background(if (selected) StudioColors.Cyan else StudioColors.TextDim)
+                .background(StudioColors.Cyan)
         )
-        Spacer(Modifier.width(7.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (enabled) StudioColors.Text else StudioColors.TextDim,
-                maxLines = 1
-            )
-            Text(
-                badge,
-                style = StudioType.mono,
-                color = if (selected) StudioColors.Cyan else StudioColors.TextDim,
-                maxLines = 1
-            )
-        }
-        if (selected) {
-            Icon(
-                imageVector = Icons.Rounded.Check,
-                contentDescription = null,
-                tint = StudioColors.Cyan,
-                modifier = Modifier.size(14.dp)
-            )
-        }
+        Spacer(Modifier.width(6.dp))
+        Text(
+            title,
+            style = MaterialTheme.typography.labelMedium,
+            color = StudioColors.Text
+        )
+        Spacer(Modifier.width(5.dp))
+        Text(
+            subtitle,
+            style = StudioType.monoSmall,
+            color = StudioColors.TextDim
+        )
     }
 }
 

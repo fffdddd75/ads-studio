@@ -12,7 +12,6 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -27,26 +26,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val prefs = application.getSharedPreferences("ads_studio", Context.MODE_PRIVATE)
     private val llmModels = LlmModelManager(application)
-    private val vlmModels = VlmModelManager(application)
     private val _state = MutableStateFlow(
         UiState(
             llmEnabled = prefs.getBoolean("llm_enabled", true),
-            llmReady = llmModels.isReady(),
-            vlmEnabled = prefs.getBoolean("vlm_enabled", false),
-            vlmReady = vlmModels.isReady()
+            llmReady = llmModels.isReady()
         )
     )
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private val models = ModelManager(application)
     private var adBitmap: Bitmap? = null
-    private var vlmServer: VlmServer? = null
     private var analysisJob: Job? = null
-    private var vlmIdleJob: Job? = null
 
     init {
         viewModelScope.launch(Dispatchers.IO) {
-            VlmServer.cleanupOrphan(application, scan = false)
+            // Старая 3B-видеомодель больше не используется: гасим осиротевший сервер
+            // и удаляем её файлы, чтобы вернуть ~2,6 ГБ хранилища.
+            VlmServer.cleanupOrphan(application, scan = true)
+            File(application.filesDir, "vlm").deleteRecursively()
+            prefs.edit().remove("vlm_enabled").apply()
         }
     }
 
@@ -87,7 +85,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val app = getApplication<Application>()
 
         analysisJob?.cancel()
-        vlmIdleJob?.cancel()
         analysisJob = viewModelScope.launch {
             val startedAt = SystemClock.elapsedRealtime()
             var asrMs = 0L
@@ -150,123 +147,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 var notice: String? = null
                 var llmReady = llmModels.isReady()
-                var vlmReady = vlmModels.isReady()
 
                 if (_state.value.llmEnabled && ranked.size >= 3) {
-                    val wantVlm = _state.value.vlmEnabled
-                    val vlmAllowed = wantVlm && hasEnoughMemoryForVlm(app)
-                    if (wantVlm && !vlmAllowed) {
-                        prefs.edit().putBoolean("vlm_enabled", false).apply()
-                        _state.update { it.copy(vlmEnabled = false) }
-                        notice = "Для видео-ИИ нужно ~3,5 ГБ свободной памяти. " +
-                            "Выбрал быстрой моделью."
-                    }
-
-                    if (vlmAllowed) {
-                        try {
-                            _state.update {
-                                it.copy(
-                                    busy = if (vlmReady) {
-                                        "Загружаю видео-ИИ…"
-                                    } else {
-                                        "Скачиваю видео-ИИ (${VlmModelManager.TOTAL_LABEL}). " +
-                                            "Не закрывай приложение…"
-                                    },
-                                    progress = null
-                                )
-                            }
-
-                            val modelStarted = SystemClock.elapsedRealtime()
-                            val paths = vlmModels.ensure { value ->
-                                _state.update { it.copy(progress = value.takeIf { p -> p >= 0f }) }
-                            }
-                            vlmReady = true
-                            _state.update {
-                                it.copy(vlmReady = true, busy = "Запускаю видео-ИИ…", progress = null)
-                            }
-
-                            val server = vlmServer ?: VlmServer(app).also { vlmServer = it }
-                            run {
-                                server.start(paths.first, paths.second) { status ->
-                                    _state.update { it.copy(busy = status) }
-                                }
-                                modelMs = SystemClock.elapsedRealtime() - modelStarted
-                                _state.update {
-                                    it.copy(busy = "Смотрю кадры и выбираю моменты…", progress = null)
-                                }
-
-                                val pool = ClipPicker.pickFromCandidates(ranked, 6)
-                                val aiStarted = SystemClock.elapsedRealtime()
-                                val indices = withContext(Dispatchers.IO) {
-                                    VlmClipSelector.select(
-                                        context = app,
-                                        uri = uri,
-                                        candidates = pool,
-                                        maxClips = 5,
-                                        server = server,
-                                        onProgress = { value ->
-                                            _state.update { it.copy(progress = value) }
-                                        },
-                                        onFramesReady = {
-                                            _state.update {
-                                                it.copy(
-                                                    busy = "Думаю над кадрами…",
-                                                    progress = null
-                                                )
-                                            }
-                                        }
-                                    )
-                                }
-
-                                aiMs = SystemClock.elapsedRealtime() - aiStarted
-
-                                if (indices.isNotEmpty()) {
-                                    val selected = indices.mapNotNull { pool.getOrNull(it - 1) }
-                                    clips = ClipPicker.fillSelection(selected, ranked, 5)
-                                } else {
-                                    notice = "Видео-ИИ не ответил номерами — выбрал по смыслу и звуку."
-                                }
-                            }
-                        } catch (error: Throwable) {
-                            if (error is CancellationException) throw error
-                            coroutineContext.ensureActive()
-                            vlmServer?.stop()
-                            notice = if (llmModels.isReady()) {
-                                "Видео-ИИ не справился: ${error.message ?: "ошибка"}. " +
-                                    "Выбрал быстрой моделью."
-                            } else {
-                                "Видео-ИИ не справился: ${error.message ?: "ошибка"}. " +
-                                    "Выбрал по эвристике."
-                            }
-                            if (llmModels.isReady()) {
-                                try {
-                                    val aiStarted = SystemClock.elapsedRealtime()
-                                    clips = chooseWithFastLlm(app, ranked) { text ->
-                                        notice = text
-                                    }
-                                    aiMs = SystemClock.elapsedRealtime() - aiStarted
-                                    llmReady = true
-                                } catch (fallback: Throwable) {
-                                    if (fallback is CancellationException) throw fallback
-                                    coroutineContext.ensureActive()
-                                    notice = "Быстрая модель тоже не справилась. Выбрал по эвристике."
-                                }
-                            }
+                    try {
+                        val aiStarted = SystemClock.elapsedRealtime()
+                        clips = chooseWithFastLlm(app, ranked) { text ->
+                            notice = text
                         }
-                    } else {
-                        try {
-                            val aiStarted = SystemClock.elapsedRealtime()
-                            clips = chooseWithFastLlm(app, ranked) { text ->
-                                notice = text
-                            }
-                            aiMs = SystemClock.elapsedRealtime() - aiStarted
-                            llmReady = true
-                        } catch (error: Throwable) {
-                            if (error is CancellationException) throw error
-                            coroutineContext.ensureActive()
-                            notice = "Нейросеть не справилась: ${error.message ?: "ошибка"}. " +
-                                "Выбрал по эвристике."
-                        }
+                        aiMs = SystemClock.elapsedRealtime() - aiStarted
+                        llmReady = true
+                    } catch (error: Throwable) {
+                        if (error is CancellationException) throw error
+                        coroutineContext.ensureActive()
+                        notice = "Два агента не справились: ${error.message ?: "ошибка"}. " +
+                            "Выбрал по эвристике."
                     }
                 }
 
@@ -283,16 +177,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         transcript = utterances,
                         clips = clips,
                         llmReady = llmReady,
-                        vlmReady = vlmReady,
                         notice = notice,
                         busy = null,
                         progress = null
                     )
                 }
-                scheduleVlmStop()
             } catch (error: CancellationException) {
                 _state.update { it.copy(busy = null, progress = null) }
-                scheduleVlmStop()
             } catch (error: Exception) {
                 _state.update {
                     it.copy(
@@ -313,7 +204,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update {
             it.copy(
                 busy = if (llmModels.isReady()) {
-                    "Загружаю нейросеть…"
+                    "Загружаю двух агентов…"
                 } else {
                     "Скачиваю нейросеть (~520 МБ)…"
                 },
@@ -327,32 +218,52 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update {
             it.copy(
                 llmReady = true,
-                busy = "Выбираю моменты по смыслу и звуку…",
+                busy = "Загружаю критик и редактор…",
                 progress = null
             )
         }
 
-        return LocalLlm(app).use { llm ->
-            withContext(Dispatchers.IO) { llm.load(modelPath) }
+        val critic = LocalLlm(app)
+        var editor: LocalLlm? = null
+        try {
+            withContext(Dispatchers.IO) {
+                critic.load(modelPath)
+                if (hasEnoughMemoryForTwoLlm(app)) {
+                    editor = try {
+                        LocalLlm(app).also { it.load(modelPath) }
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (error: Throwable) {
+                        null
+                    }
+                }
+            }
+
+            val editorLlm = editor
+            if (editorLlm == null) {
+                _state.update { it.copy(busy = "Памяти мало: агенты работают по очереди…") }
+            }
 
             val pool = ClipPicker.pickFromCandidates(candidates, 8)
+                .sortedByDescending { it.score }
 
             // Первый агент: критик придумывает проверочные вопросы по кандидатам.
-            _state.update { it.copy(busy = "Критик проверяет моменты…") }
+            _state.update { it.copy(busy = "Критик задаёт вопросы…") }
             val questions = withContext(Dispatchers.Default) {
-                llm.generate(LlmClipSelector.criticPrompt(pool))
+                critic.generate(LlmClipSelector.criticPrompt(pool))
             }.ifBlank { LlmClipSelector.defaultQuestions }
 
             // Второй агент: редактор отвечает на вопросы и выбирает номера.
             _state.update { it.copy(busy = "Редактор отвечает и выбирает…") }
             val response = withContext(Dispatchers.Default) {
-                llm.generate(LlmClipSelector.editorPrompt(pool, 5, questions))
+                (editorLlm ?: critic).generate(LlmClipSelector.editorPrompt(pool, 5, questions))
             }
 
             val indices = LlmClipSelector.parseEditorChoice(response, pool.size, 5)
                 .ifEmpty { LlmClipSelector.parseLooseChoice(response, pool.size, 5) }
+                .ifEmpty { LlmClipSelector.parse(response, pool.size, 5) }
             if (indices.isEmpty()) {
-                onNotice("Критик и редактор не дали номеров — выбрал по смыслу и звуку.")
+                onNotice("Агенты не дали номеров — выбрал по смыслу и звуку.")
                 ClipPicker.pickFromCandidates(candidates, 5)
             } else {
                 val strongKeys = LlmClipSelector.parseStrong(response, pool.size)
@@ -389,17 +300,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 ClipPicker.fillSelection(selected, candidates, 5)
             }
-        }
-    }
-
-    fun setVlmEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean("vlm_enabled", enabled).apply()
-        if (enabled) prefs.edit().putBoolean("llm_enabled", true).apply()
-        _state.update {
-            it.copy(
-                vlmEnabled = enabled,
-                llmEnabled = if (enabled) true else it.llmEnabled
-            )
+        } finally {
+            editor?.close()
+            critic.close()
         }
     }
 
@@ -517,33 +420,21 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(error = null) }
     }
 
-    private fun scheduleVlmStop() {
-        if (vlmServer == null) return
-        vlmIdleJob?.cancel()
-        vlmIdleJob = viewModelScope.launch {
-            delay(120_000)
-            if (analysisJob?.isActive != true) {
-                vlmServer?.stop()
-            }
-        }
-    }
-
     fun cancelAnalysis() {
         analysisJob?.cancel()
         analysisJob = null
-        vlmIdleJob?.cancel()
-        vlmServer?.stop()
         _state.update {
             it.copy(busy = null, progress = null, notice = "Остановлено")
         }
     }
 
-    private fun hasEnoughMemoryForVlm(context: Context): Boolean {
+    private fun hasEnoughMemoryForTwoLlm(context: Context): Boolean {
         val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
             ?: return false
         val info = ActivityManager.MemoryInfo()
         manager.getMemoryInfo(info)
-        return info.availMem >= 3_800L * 1024 * 1024
+        // Два экземпляра 0.5B занимают заметно меньше одной 3B-VLM.
+        return info.availMem >= 2_200L * 1024 * 1024
     }
 
     private fun timingText(totalMs: Long, asrMs: Long, modelMs: Long, aiMs: Long): String {
@@ -587,11 +478,5 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return resolver.openInputStream(uri)?.use {
             BitmapFactory.decodeStream(it, null, options)
         }
-    }
-
-    override fun onCleared() {
-        vlmServer?.close()
-        vlmServer = null
-        super.onCleared()
     }
 }

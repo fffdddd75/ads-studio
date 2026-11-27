@@ -71,12 +71,12 @@ object LlmClipSelector {
         questions: String
     ): String {
         val count = minOf(maxClips, candidates.size)
-        val checklist = questions.ifBlank { defaultQuestions }.take(350)
+        val checklist = questions.ifBlank { defaultQuestions }.take(300)
         return """
             <|endoftext|><|im_start|>system
-            Ты — редактор Shorts. Ответь на вопросы критика по каждому фрагменту и выбери $count лучших.
-            Главное — смысл текста: конкретный случай, конфликт, неожиданный поворот, сильное мнение, полезный совет, эмоция.
-            Скучно и не выбирай: приветствие, «в этом видео», представление, реклама, подписка, вода, пустое перечисление.
+            Ты — редактор Shorts. Ответь на вопросы критика и выбери $count лучших фрагментов.
+            Главное — конкретное событие, конфликт, неожиданность, польза или эмоция.
+            Не выбирай приветствие, «в этом видео», рекламу, подписку и воду.
             Подсказки: [движение 0.8] — действие; [склейки 2] — смена планов; [звук 0.7] — громкая речь.
             <|im_end|>
             <|im_start|>user
@@ -86,8 +86,7 @@ object LlmClipSelector {
             Фрагменты:
             ${candidateList(candidates, emptyMap())}
 
-            Для каждого фрагмента напиши строку: номер — СИЛЬНЫЙ или СЛАБЫЙ — коротко почему.
-            В конце обязательно: ВЫБОР: номера через запятую, от лучшего к худшему.
+            Верни ТОЛЬКО номера через запятую, от лучшего к худшему. Без слов и объяснений.
             <|im_end|>
             <|im_start|>assistant
         """.trimIndent()
@@ -139,7 +138,7 @@ object LlmClipSelector {
         val answerIndex = lower.lastIndexOf("ответ")
         val raw = if (answerIndex >= 0) response.substring(answerIndex + 6) else response
         val cleaned = raw.trim().trim('.', ':', ' ', '\n', '\r', '—', '-')
-        if (!cleaned.matches(Regex("[\\d,\\s]+"))) return emptyList()
+        if (!cleaned.matches(Regex("[\\d,\\s.;:—–-]+"))) return emptyList()
         return numbers(cleaned, candidateCount, maxClips)
     }
 

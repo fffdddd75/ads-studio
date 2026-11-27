@@ -129,7 +129,6 @@ fun AdsStudioApp(vm: AppViewModel = viewModel()) {
                 if (videoUri == null) {
                     OnboardingContent(
                         llmEnabled = state.llmEnabled,
-                        vlmEnabled = state.vlmEnabled,
                         onPickVideo = pickVideo
                     )
                 } else {
@@ -163,14 +162,13 @@ private fun Header() {
 @Composable
 private fun OnboardingContent(
     llmEnabled: Boolean,
-    vlmEnabled: Boolean,
     onPickVideo: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
         Reveal(1) { Hero() }
         Reveal(2) { StepStrip() }
         Reveal(3) { ProjectPickerCard(onClick = onPickVideo) }
-        Reveal(4) { ModelsHint(llmEnabled, vlmEnabled) }
+        Reveal(4) { ModelsHint(llmEnabled) }
     }
 }
 
@@ -198,7 +196,7 @@ private fun Hero() {
 }
 
 @Composable
-private fun ModelsHint(llmEnabled: Boolean, vlmEnabled: Boolean) {
+private fun ModelsHint(llmEnabled: Boolean) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Center,
@@ -213,8 +211,7 @@ private fun ModelsHint(llmEnabled: Boolean, vlmEnabled: Boolean) {
         Spacer(Modifier.width(6.dp))
         Text(
             text = when {
-                vlmEnabled -> "Первый раз: Vosk 45 МБ + видео-ИИ 2,6 ГБ. Нужно ~3,5 ГБ свободной памяти."
-                llmEnabled -> "Первый раз: Vosk 45 МБ + Qwen 520 МБ. Дальше — офлайн."
+                llmEnabled -> "Первый раз: Vosk 45 МБ + Qwen 520 МБ. Два агента — офлайн."
                 else -> "Первый раз: Vosk 45 МБ. Дальше — офлайн."
             },
             style = MaterialTheme.typography.bodySmall,
@@ -256,10 +253,8 @@ private fun ProjectContent(
                 SectionHeader("03", "ИИ")
                 AiCard(
                     enabled = state.llmEnabled,
-                    vlmEnabled = state.vlmEnabled,
-                    vlmReady = state.vlmReady,
+                    ready = state.llmReady,
                     onToggle = vm::setLlmEnabled,
-                    onVlmToggle = vm::setVlmEnabled,
                     interactive = state.busy == null
                 )
             }
@@ -419,8 +414,6 @@ private fun ActionSection(
             Spacer(Modifier.width(6.dp))
             Text(
                 text = when {
-                    state.vlmEnabled && !state.vlmReady ->
-                        "Первый раз: Vosk 45 МБ + видео-ИИ 2,6 ГБ"
                     state.llmEnabled && !state.llmReady ->
                         "Первый раз: Vosk 45 МБ + Qwen 520 МБ"
                     else -> "Всё локально · ничего не уходит в облако"

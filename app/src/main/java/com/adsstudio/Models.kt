@@ -38,8 +38,6 @@ data class UiState(
     val ratio: OutputRatio = OutputRatio.RATIO_16_9,
     val llmEnabled: Boolean = true,
     val llmReady: Boolean = false,
-    val vlmEnabled: Boolean = false,
-    val vlmReady: Boolean = false,
     val adSet: Boolean = false,
     val adPreview: Bitmap? = null,
     val busy: String? = null,
