@@ -433,7 +433,8 @@ private fun ActionSection(
         state.busy?.let { busy ->
             ProcessingCard(
                 busy = busy,
-                progress = state.progress
+                progress = state.progress,
+                onCancel = vm::cancelAnalysis
             )
         }
     }

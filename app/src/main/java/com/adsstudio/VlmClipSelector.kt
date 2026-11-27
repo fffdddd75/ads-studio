@@ -21,8 +21,8 @@ import kotlin.math.max
  */
 object VlmClipSelector {
 
-    private const val SHEET_W = 1280
-    private const val SHEET_H = 720
+    private const val SHEET_W = 1024
+    private const val SHEET_H = 576
     private const val HEADER_H = 44
     private const val COLS = 3
     private const val ROWS = 2

@@ -1,11 +1,15 @@
 package com.adsstudio
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import org.vosk.Model
 import org.vosk.Recognizer
 import java.io.Closeable
 import java.io.File
 import java.io.RandomAccessFile
+import kotlin.coroutines.coroutineContext
 
 /**
  * Обёртка над Vosk: WAV 16 kHz mono -> фразы с таймкодами.
@@ -16,7 +20,8 @@ class VoskAsr(modelDir: String) : Closeable {
     private val model = Model(modelDir)
     private val recognizer = Recognizer(model, 16000f).apply { setWords(true) }
 
-    fun transcribe(wav: File, onProgress: (Float) -> Unit = {}): List<Utterance> {
+    suspend fun transcribe(wav: File, onProgress: (Float) -> Unit = {}): List<Utterance> =
+        withContext(Dispatchers.IO) {
         val words = mutableListOf<Word>()
         val result = mutableListOf<Utterance>()
         val total = wav.length().coerceAtLeast(1)
@@ -38,6 +43,7 @@ class VoskAsr(modelDir: String) : Closeable {
             val buffer = ByteArray(8192)
             var done = 0L
             while (true) {
+                coroutineContext.ensureActive()
                 val read = file.read(buffer)
                 if (read <= 0) break
                 val even = read - (read % 2)
@@ -51,7 +57,7 @@ class VoskAsr(modelDir: String) : Closeable {
 
         addWords(recognizer.finalResult, words) { flushWords() }
         flushWords()
-        return result
+        result
     }
 
     private fun addWords(

@@ -53,16 +53,17 @@ class VlmServer(private val context: Context) : Closeable {
             server.absolutePath,
             "-m", modelPath,
             "--mmproj", mmprojPath,
-            "-c", "4096",
+            "-c", "2048",
             "-np", "1",
             "-t", "4",
             "--host", "127.0.0.1",
             "--port", port.toString(),
             "--no-webui",
             "--jinja",
-            "--image-max-tokens", "256",
+            "--image-max-tokens", "128",
+            "--no-warmup",
             "--log-colors", "off"
-        )
+        ) + cpuAffinityArgs()
 
         val builder = ProcessBuilder(command)
         builder.directory(context.filesDir)
@@ -89,7 +90,7 @@ class VlmServer(private val context: Context) : Closeable {
         }
     }
 
-    fun rank(parts: List<VlmPart>, maxTokens: Int = 96): String {
+    fun rank(parts: List<VlmPart>, maxTokens: Int = 32): String {
         val content = JSONArray()
         parts.forEach { part ->
             part.text?.let { text ->
@@ -124,13 +125,14 @@ class VlmServer(private val context: Context) : Closeable {
             .put("temperature", 0.1)
             .put("top_p", 0.9)
             .put("max_tokens", maxTokens)
+            .put("stop", JSONArray().put("\n"))
             .put("stream", false)
             .toString()
 
         val connection = (URL("$baseUrl/v1/chat/completions").openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             connectTimeout = 15_000
-            readTimeout = 600_000
+            readTimeout = 180_000
             doOutput = true
             setRequestProperty("Content-Type", "application/json; charset=utf-8")
             setRequestProperty("Accept", "application/json")
@@ -158,6 +160,46 @@ class VlmServer(private val context: Context) : Closeable {
         } finally {
             connection.disconnect()
         }
+    }
+
+    /**
+     * На big.LITTLE llama.cpp по умолчанию садится на первые N ядер, а это
+     * обычно маленькие. Привязываем потоки к самым быстрым ядрам: на типичном
+     * 8-ядерном телефоне это 4–7, что даёт кратный рост префилла.
+     */
+    private fun cpuAffinityArgs(): List<String> {
+        val mask = bigCoreMask(Runtime.getRuntime().availableProcessors()) ?: return emptyList()
+        return listOf("--cpu-mask", mask)
+    }
+
+    private fun bigCoreMask(cores: Int): String? {
+        if (cores < 4) return null
+
+        val freqs = (0 until cores).map { cpu ->
+            runCatching {
+                File("/sys/devices/system/cpu/cpu$cpu/cpufreq/cpuinfo_max_freq")
+                    .readText()
+                    .trim()
+                    .toLong()
+            }.getOrNull()
+        }
+
+        if (freqs.all { it != null }) {
+            val max = freqs.filterNotNull().maxOrNull() ?: return null
+            val big = freqs.indices.filter { (freqs[it] ?: 0L) >= max * 85 / 100 }
+            if (big.isNotEmpty() && big.size < cores) return maskOf(big)
+        }
+
+        // Фолбэк: верхняя половина ядер. На 8-ядерных это 4–7.
+        if (cores >= 8) return maskOf((cores / 2 until cores).toList())
+        if (cores == 6) return maskOf(listOf(4, 5))
+        return null
+    }
+
+    private fun maskOf(cpus: List<Int>): String {
+        var mask = 0L
+        cpus.forEach { mask = mask or (1L shl it) }
+        return java.lang.Long.toHexString(mask).uppercase()
     }
 
     private fun waitForHealth(process: Process, timeoutMs: Long): Boolean {

@@ -748,6 +748,7 @@ fun AdCard(
 fun ProcessingCard(
     busy: String,
     progress: Float?,
+    onCancel: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val reducedMotion = rememberReducedMotion()
@@ -795,6 +796,13 @@ fun ProcessingCard(
             StudioProgressBar(progress = progress)
         } else {
             IndeterminateBar()
+        }
+        Spacer(Modifier.height(4.dp))
+        TextButton(
+            onClick = onCancel,
+            modifier = Modifier.align(Alignment.End)
+        ) {
+            Text("Отменить", color = StudioColors.TextMuted)
         }
     }
 }

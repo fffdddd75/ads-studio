@@ -5,9 +5,14 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -15,6 +20,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.coroutines.coroutineContext
 
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -34,6 +40,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val models = ModelManager(application)
     private var adBitmap: Bitmap? = null
     private var vlmServer: VlmServer? = null
+    private var analysisJob: Job? = null
+    private var vlmIdleJob: Job? = null
 
     fun onVideoPicked(uri: Uri) {
         viewModelScope.launch {
@@ -71,7 +79,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val uri = _state.value.videoUri ?: return
         val app = getApplication<Application>()
 
-        viewModelScope.launch {
+        analysisJob?.cancel()
+        vlmIdleJob?.cancel()
+        analysisJob = viewModelScope.launch {
+            val startedAt = SystemClock.elapsedRealtime()
+            var asrMs = 0L
+            var modelMs = 0L
+            var aiMs = 0L
+
             _state.update {
                 it.copy(
                     busy = "Готовлю модель (~45 МБ при первом запуске)…",
@@ -98,11 +113,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 )
 
                 _state.update { it.copy(busy = "Распознаю речь…", progress = 0f) }
-                val utterances = VoskAsr(modelDir).use { asr ->
-                    asr.transcribe(wav) { value ->
-                        _state.update { it.copy(progress = value) }
+                val asrStarted = SystemClock.elapsedRealtime()
+                val utterances = withContext(Dispatchers.IO) {
+                    VoskAsr(modelDir).use { asr ->
+                        asr.transcribe(wav) { value ->
+                            _state.update { it.copy(progress = value) }
+                        }
                     }
                 }
+                asrMs = SystemClock.elapsedRealtime() - asrStarted
                 wav.delete()
 
                 val candidates = ClipPicker.candidates(utterances, 10)
@@ -126,6 +145,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 )
                             }
 
+                            val modelStarted = SystemClock.elapsedRealtime()
                             val paths = vlmModels.ensure { value ->
                                 _state.update { it.copy(progress = value.takeIf { p -> p >= 0f }) }
                             }
@@ -139,11 +159,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 server.start(paths.first, paths.second) { status ->
                                     _state.update { it.copy(busy = status) }
                                 }
+                                modelMs = SystemClock.elapsedRealtime() - modelStarted
                                 _state.update {
                                     it.copy(busy = "Смотрю кадры и выбираю моменты…", progress = null)
                                 }
 
                                 val pool = ClipPicker.pickFromCandidates(candidates, 6)
+                                val aiStarted = SystemClock.elapsedRealtime()
                                 val indices = withContext(Dispatchers.IO) {
                                     VlmClipSelector.select(
                                         context = app,
@@ -165,6 +187,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                     )
                                 }
 
+                                aiMs = SystemClock.elapsedRealtime() - aiStarted
+
                                 if (indices.isNotEmpty()) {
                                     val selected = indices.mapNotNull { pool.getOrNull(it - 1) }
                                     clips = ClipPicker.fillSelection(selected, candidates, 5)
@@ -173,7 +197,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                                 }
                             }
                         } catch (error: Throwable) {
-                            if (error is kotlinx.coroutines.CancellationException) throw error
+                            if (error is CancellationException) throw error
+                            coroutineContext.ensureActive()
+                            vlmServer?.stop()
                             notice = if (llmModels.isReady()) {
                                 "Видео-ИИ не справился: ${error.message ?: "ошибка"}. " +
                                     "Выбрал быстрой моделью."
@@ -183,28 +209,42 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                             }
                             if (llmModels.isReady()) {
                                 try {
+                                    val aiStarted = SystemClock.elapsedRealtime()
                                     clips = chooseWithFastLlm(app, uri, candidates) { text ->
                                         notice = text
                                     }
+                                    aiMs = SystemClock.elapsedRealtime() - aiStarted
                                     llmReady = true
                                 } catch (fallback: Throwable) {
-                                    if (fallback is kotlinx.coroutines.CancellationException) throw fallback
+                                    if (fallback is CancellationException) throw fallback
+                                    coroutineContext.ensureActive()
                                     notice = "Быстрая модель тоже не справилась. Выбрал по эвристике."
                                 }
                             }
                         }
                     } else {
                         try {
+                            val aiStarted = SystemClock.elapsedRealtime()
                             clips = chooseWithFastLlm(app, uri, candidates) { text ->
                                 notice = text
                             }
+                            aiMs = SystemClock.elapsedRealtime() - aiStarted
                             llmReady = true
                         } catch (error: Throwable) {
-                            if (error is kotlinx.coroutines.CancellationException) throw error
+                            if (error is CancellationException) throw error
+                            coroutineContext.ensureActive()
                             notice = "Нейросеть не справилась: ${error.message ?: "ошибка"}. " +
                                 "Выбрал по эвристике."
                         }
                     }
+                }
+
+                val totalMs = SystemClock.elapsedRealtime() - startedAt
+                if (totalMs > 45_000) {
+                    notice = listOfNotNull(
+                        notice,
+                        timingText(totalMs, asrMs, modelMs, aiMs)
+                    ).joinToString(" ")
                 }
 
                 _state.update {
@@ -218,6 +258,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         progress = null
                     )
                 }
+                scheduleVlmStop()
+            } catch (error: CancellationException) {
+                _state.update { it.copy(busy = null, progress = null) }
+                scheduleVlmStop()
             } catch (error: Exception) {
                 _state.update {
                     it.copy(
@@ -405,6 +449,44 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun dismissError() {
         _state.update { it.copy(error = null) }
+    }
+
+    private fun scheduleVlmStop() {
+        if (vlmServer == null) return
+        vlmIdleJob?.cancel()
+        vlmIdleJob = viewModelScope.launch {
+            delay(120_000)
+            if (analysisJob?.isActive != true) {
+                vlmServer?.stop()
+            }
+        }
+    }
+
+    fun cancelAnalysis() {
+        analysisJob?.cancel()
+        analysisJob = null
+        vlmServer?.stop()
+        _state.update {
+            it.copy(busy = null, progress = null, notice = "Остановлено")
+        }
+    }
+
+    private fun timingText(totalMs: Long, asrMs: Long, modelMs: Long, aiMs: Long): String {
+        val parts = mutableListOf("речь ${duration(asrMs)}")
+        if (modelMs >= 5_000) parts += "загрузка ИИ ${duration(modelMs)}"
+        if (aiMs > 0) parts += "ИИ ${duration(aiMs)}"
+        return "Готово за ${duration(totalMs)}: ${parts.joinToString(", ")}."
+    }
+
+    private fun duration(ms: Long): String {
+        val total = (ms / 1000).coerceAtLeast(0)
+        val minutes = total / 60
+        val seconds = total % 60
+        return if (minutes > 0) {
+            "$minutes мин ${seconds.toString().padStart(2, '0')} с"
+        } else {
+            "$seconds с"
+        }
     }
 
     private fun sanitizeFileName(name: String): String =
