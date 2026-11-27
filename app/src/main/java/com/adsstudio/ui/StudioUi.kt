@@ -552,7 +552,7 @@ fun AiCard(
                     when {
                         vlmEnabled && vlmReady -> "Qwen2.5-VL · 3B · нужно ~3,5 ГБ"
                         vlmEnabled -> "Qwen2.5-VL · 3B · ${VlmModelManager.TOTAL_LABEL} · нужно ~3,5 ГБ"
-                        enabled -> "Qwen 2.5 · 0.5B · рекомендуется"
+                        enabled -> "Qwen 2.5 · 0.5B · два агента"
                         else -> "Выключена · нарезка по эвристике"
                     },
                     style = MaterialTheme.typography.bodySmall,
@@ -563,7 +563,7 @@ fun AiCard(
                     if (vlmEnabled) {
                         "Смотрит кадры. Требует ~3,5 ГБ свободной памяти, может не хватить."
                     } else {
-                        "Выбирает по смыслу текста, звуку и движению. Без тяжёлой видеомодели."
+                        "Критик задаёт вопросы, редактор отвечает и выбирает. Смысл, звук, движение."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = StudioColors.TextDim

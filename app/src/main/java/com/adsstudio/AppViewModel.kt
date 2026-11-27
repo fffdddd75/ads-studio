@@ -336,20 +336,47 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             withContext(Dispatchers.IO) { llm.load(modelPath) }
 
             val pool = ClipPicker.pickFromCandidates(candidates, 8)
-            val prompt = LlmClipSelector.prompt(pool, 5)
+
+            // Первый агент: критик придумывает проверочные вопросы по кандидатам.
+            _state.update { it.copy(busy = "Критик проверяет моменты…") }
+            val questions = withContext(Dispatchers.Default) {
+                llm.generate(LlmClipSelector.criticPrompt(pool))
+            }.ifBlank { LlmClipSelector.defaultQuestions }
+
+            // Второй агент: редактор отвечает на вопросы и выбирает номера.
+            _state.update { it.copy(busy = "Редактор отвечает и выбирает…") }
             val response = withContext(Dispatchers.Default) {
-                llm.generate(prompt)
+                llm.generate(LlmClipSelector.editorPrompt(pool, 5, questions))
             }
-            val indices = LlmClipSelector.parse(response, pool.size, 5)
+
+            val indices = LlmClipSelector.parseEditorChoice(response, pool.size, 5)
+                .ifEmpty { LlmClipSelector.parseLooseChoice(response, pool.size, 5) }
             if (indices.isEmpty()) {
-                onNotice("Нейросеть не ответила номерами — выбрал по смыслу и звуку.")
+                onNotice("Критик и редактор не дали номеров — выбрал по смыслу и звуку.")
                 ClipPicker.pickFromCandidates(candidates, 5)
             } else {
+                val strongKeys = LlmClipSelector.parseStrong(response, pool.size)
+                    .mapNotNull { pool.getOrNull(it - 1) }
+                    .map { it.startMs to it.endMs }
+                    .toSet()
+                val weakKeys = LlmClipSelector.parseWeak(response, pool.size)
+                    .mapNotNull { pool.getOrNull(it - 1) }
+                    .map { it.startMs to it.endMs }
+                    .toSet()
+
+                fun verdictBonus(clip: SuggestedClip): Float {
+                    val key = clip.startMs to clip.endMs
+                    var value = 0f
+                    if (key in strongKeys) value += 10f
+                    if (key in weakKeys) value -= 18f
+                    return value
+                }
+
                 val llmSelected = indices.mapNotNull { pool.getOrNull(it - 1) }
                 val heuristic = ClipPicker.pickFromCandidates(candidates, 5)
                 val combined =
-                    (llmSelected.map { it to (it.score + 12f) } +
-                        heuristic.map { it to it.score })
+                    (llmSelected.map { it to (it.score + 12f + verdictBonus(it)) } +
+                        heuristic.map { it to (it.score + verdictBonus(it)) })
                         .sortedByDescending { it.second }
                         .map { it.first }
                         .distinctBy { it.startMs to it.endMs }
