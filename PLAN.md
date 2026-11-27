@@ -180,19 +180,85 @@ OpenAI-совместимый `POST /v1/chat/completions`, `stream=false`, `temp
 - Git push без токена падает (`could not read Username`) — пушить HTTPS-URL с PAT,
   токен в репозиторий не коммитить.
 
-## 9. Сборка и доставка
+## 9. GitHub, сборка и доставка APK
 
+### Репозиторий
+
+- URL: `https://github.com/fffdddd75/ads-studio`
+- Ветка по умолчанию: `main`, репозиторий **публичный**
+- Рабочая копия на телефоне: `/data/data/com.termux/files/home/ads studio`
+- Токен (PAT) в репозиторий **не коммитить**. Он нужен только для `git push` и GitHub API,
+  подставляется в команду из локального окружения/сессии.
+
+### Как устроена сборка
+
+`.github/workflows/build.yml`, имя workflow — `build`.
+
+Триггеры:
+- `push` в любую ветку (основной путь — push в `main`);
+- `workflow_dispatch` (ручной запуск кнопкой в вебе или через API).
+
+Шаги: checkout → JDK 17 (temurin) → Android SDK (`platforms;android-34 build-tools;34.0.0`)
+→ Gradle 8.7 → `gradle assembleDebug --no-daemon` → upload-artifact.
+
+Результат: артефакт **`ads-studio-debug`** (zip ~32 МБ), внутри `app-debug.apk` (~53 МБ).
+Сборка идёт ~4–6 минут. Отдельного релиза нет — забираем артефакт.
+
+### Команды (нужен PAT в переменной)
+
+```bash
+# 1. Запушить изменения
+git add -A && git commit -m "..." \
+  && git push https://<user>:<PAT>@github.com/fffdddd75/ads-studio.git main
+
+# 2. Посмотреть последние запуски
+curl -s -H "Authorization: token $PAT" \
+  "https://api.github.com/repos/fffdddd75/ads-studio/actions/runs?per_page=3" \
+  | python3 -c "import json,sys;[print(r['id'],r['head_sha'][:7],r['status'],r['conclusion']) for r in json.load(sys.stdin)['workflow_runs']]"
+
+# 3. Артефакты успешного запуска (подставить RUN_ID)
+curl -s -H "Authorization: token $PAT" \
+  "https://api.github.com/repos/fffdddd75/ads-studio/actions/runs/$RUN_ID/artifacts" \
+  | python3 -c "import json,sys;[print(a['id'],a['name'],a['size_in_bytes']) for a in json.load(sys.stdin)['artifacts']]"
+
+# 4. Скачать и распаковать
+curl -sL -H "Authorization: token $PAT" \
+  "https://api.github.com/repos/fffdddd75/ads-studio/actions/artifacts/$ARTIFACT_ID/zip" -o apk.zip
+unzip -o apk.zip -d apk_out
+
+# 5. Отдать пользователю
+cp apk_out/app-debug.apk /storage/emulated/0/Download/AdsStudio-<версия>.apk
+cp apk_out/app-debug.apk /storage/emulated/0/Download/AdsStudio.apk
 ```
-push в main → GitHub Actions (build.yml) → gradle assembleDebug
-            → artifact "ads-studio-debug" (zip с app-debug.apk)
+
+Логи упавшей джобы:
+
+```bash
+curl -sL -H "Authorization: token $PAT" \
+  "https://api.github.com/repos/fffdddd75/ads-studio/actions/jobs/$JOB_ID/logs" \
+  | grep -nE "e: |error:|FAILURE:|What went wrong"
 ```
 
-Доставка пользователю (пути на телефоне):
-`/storage/emulated/0/Download/AdsStudio-0.4.0.apk` и копия `AdsStudio.apk`.
-Версию в имени менять при каждом релизе, копию `AdsStudio.apk` держать свежей.
+ID джобы берётся из
+`https://api.github.com/repos/fffdddd75/ads-studio/actions/runs/$RUN_ID/jobs`.
 
-Локальная сборка в Termux не используется (медленно, SDK нет) — только CI.
-Проверка синтаксиса до пуша: внимательно к объявлению констант и импортам, CI идёт ~5 минут.
+### Правила релиза
+
+- Поднять `versionName` и `versionCode` в `app/build.gradle.kts` **до** пуша.
+- Имя файла для пользователя: `AdsStudio-<versionName>.apk`, плюс копия `AdsStudio.apk`.
+- Ставить поверх предыдущей версии (подпись стабильная, данные сохраняются).
+- Не отдавать APK, пока CI не сказал `completed success`.
+
+### Типовые проблемы
+
+| Симптом | Причина / что делать |
+|---|---|
+| `could not read Username for 'https://github.com'` | пушить URL с PAT, а не `origin` без кредов |
+| логи джобы отдают `BlobNotFound` | джоба ещё не завершилась, подождать |
+| `e: ... must be initialized` | forward-reference констант в `companion object` |
+| артефакт качается по 5–10 минут | GitHub медленный, качать в фоне с `--retry`, не убивать |
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | сменилась подпись — проверить `ads-debug.p12` |
+| сборка зелёная, но APK не ставится | проверить ABI (только arm64-v8a) и `minSdk` |
 
 ## 10. Следующие задачи (по приоритету)
 
