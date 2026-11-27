@@ -43,6 +43,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var analysisJob: Job? = null
     private var vlmIdleJob: Job? = null
 
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            VlmServer.cleanupOrphan(application)
+        }
+    }
+
     fun onVideoPicked(uri: Uri) {
         viewModelScope.launch {
             _state.update {

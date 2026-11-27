@@ -25,6 +25,7 @@ class VlmServer(private val context: Context) : Closeable {
     private var process: Process? = null
     private var port: Int = 18081
     private val log = File(context.filesDir, "vlm-server.log")
+    private val pidFile = File(context.filesDir, "vlm-server.pid")
 
     private val baseUrl: String
         get() = "http://127.0.0.1:$port"
@@ -36,6 +37,9 @@ class VlmServer(private val context: Context) : Closeable {
     ) = withContext(Dispatchers.IO) {
         if (process?.isAlive == true && health()) return@withContext
 
+        cleanupOrphan(context, keepPid = process?.let { pidOf(it) })
+        if (process?.isAlive == true) stop()
+
         val nativeDir = context.applicationInfo.nativeLibraryDir
         val server = File(nativeDir, "libllama-server.so")
         if (!server.exists()) {
@@ -43,20 +47,17 @@ class VlmServer(private val context: Context) : Closeable {
         }
         server.setExecutable(true)
 
-        // Если сервер остался от прошлого запуска — просто переиспользуем его.
-        if (health()) return@withContext
-        if (process?.isAlive == true) stop()
-
         log.writeText("")
+        port = freePort()
 
         val command = listOf(
             server.absolutePath,
             "-m", modelPath,
             "--mmproj", mmprojPath,
-            "-c", "2048",
+            "-c", "1024",
             "-np", "1",
             "-b", "512",
-            "-ub", "512",
+            "-ub", "256",
             "--host", "127.0.0.1",
             "--port", port.toString(),
             "--no-webui",
@@ -83,6 +84,7 @@ class VlmServer(private val context: Context) : Closeable {
             error("Видео-ИИ не запустился: ${error.message ?: "ошибка"}")
         }
         process = started
+        pidFile.writeText(pidOf(started).toString())
 
         if (!waitForHealth(started, timeoutMs = 240_000)) {
             val tail = logTail()
@@ -166,6 +168,12 @@ class VlmServer(private val context: Context) : Closeable {
             )
         } catch (connect: java.net.ConnectException) {
             error("не отвечает")
+        } catch (io: java.io.IOException) {
+            val tail = logTail()
+            error(
+                if (tail.isBlank()) "соединение оборвалось"
+                else "соединение оборвалось: $tail"
+            )
         } finally {
             connection.disconnect()
         }
@@ -229,6 +237,14 @@ class VlmServer(private val context: Context) : Closeable {
         return java.lang.Long.toHexString(mask).uppercase()
     }
 
+    private fun pidOf(process: Process): Long = runCatching {
+        Process::class.java.getMethod("pid").invoke(process) as Long
+    }.getOrDefault(-1L)
+
+    private fun freePort(): Int = runCatching {
+        java.net.ServerSocket(0).use { it.localPort }
+    }.getOrDefault(18081)
+
     private fun waitForHealth(process: Process, timeoutMs: Long): Boolean {
         val deadline = System.currentTimeMillis() + timeoutMs
         while (System.currentTimeMillis() < deadline) {
@@ -263,6 +279,7 @@ class VlmServer(private val context: Context) : Closeable {
     }
 
     fun stop() {
+        pidFile.delete()
         val running = process ?: return
         process = null
         runCatching {
@@ -273,5 +290,39 @@ class VlmServer(private val context: Context) : Closeable {
 
     override fun close() {
         stop()
+    }
+
+    companion object {
+        /**
+         * Убивает llama-server, оставшийся от прошлого процесса приложения
+         * (обновление/force-stop). Иначе он держит порт и 2,8 ГБ памяти.
+         */
+        fun cleanupOrphan(context: Context, keepPid: Long? = null) {
+            val killed = mutableSetOf<Long>()
+
+            fun kill(pid: Long) {
+                if (pid <= 0 || pid == keepPid || !killed.add(pid)) return
+                val cmdline = runCatching { File("/proc/$pid/cmdline").readText() }.getOrNull() ?: return
+                if (!cmdline.contains("libllama-server")) return
+                val ok = runCatching {
+                    ProcessBuilder("/system/bin/kill", "-9", pid.toString())
+                        .redirectErrorStream(true)
+                        .start()
+                        .waitFor(3, TimeUnit.SECONDS)
+                }.isSuccess
+                if (!ok) runCatching { android.os.Process.killProcess(pid.toInt()) }
+            }
+
+            val file = File(context.filesDir, "vlm-server.pid")
+            val pid = runCatching { file.readText().trim().toLong() }.getOrNull()
+            file.delete()
+            if (pid != null) kill(pid)
+
+            // Страховка для версий без PID-файла: ищем свои llama-server в /proc.
+            File("/proc").listFiles()?.forEach { dir ->
+                val candidate = dir.name.toIntOrNull() ?: return@forEach
+                kill(candidate.toLong())
+            }
+        }
     }
 }
