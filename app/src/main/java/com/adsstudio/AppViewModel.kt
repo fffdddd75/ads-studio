@@ -592,7 +592,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     extractor.setDataSource(it.fileDescriptor, it.startOffset, it.length)
                 }
             } else {
-                extractor.setDataSource(context, uri)
+                extractor.setDataSource(context, uri, null)
             }
             for (index in 0 until extractor.trackCount) {
                 val mime = extractor.getTrackFormat(index)
