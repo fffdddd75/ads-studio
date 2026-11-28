@@ -695,10 +695,13 @@ fun AdCard(
             Spacer(Modifier.height(3.dp))
             Text(
                 if (adSet) {
-                    val seconds = ((adDurationMs ?: 0L) / 1000L).coerceAtLeast(1L)
-                    "$seconds с · на 0:30, 1:30, 2:30…"
+                    val seconds = (minOf(
+                        adDurationMs ?: 0L,
+                        ClipExporter.MAX_AD_MS
+                    ) / 1000L).coerceAtLeast(1L)
+                    "$seconds с · звук · в середине каждой минуты"
                 } else {
-                    "MP4 до 10 секунд · в середине каждой минуты"
+                    "MP4 со звуком до 10 с · в середине каждой минуты"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = StudioColors.TextMuted

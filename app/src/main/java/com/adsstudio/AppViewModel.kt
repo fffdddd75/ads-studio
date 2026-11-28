@@ -4,6 +4,8 @@ import android.app.ActivityManager
 import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.SystemClock
@@ -359,11 +361,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 return@launch
             }
 
+            val hasAudio = withContext(Dispatchers.IO) {
+                runCatching { hasAudioTrack(app, uri) }.getOrDefault(false)
+            }
+            if (!hasAudio) {
+                _state.update {
+                    it.copy(error = "В рекламе нет звука — выбери видео со звуком")
+                }
+                return@launch
+            }
+
             val thumbnail = withContext(Dispatchers.IO) {
                 runCatching { loadVideoThumbnail(app, uri, 512) }.getOrNull()
             }
-            val duration = (probe.durationMs.takeIf { it > 0 } ?: 10_000L)
-                .coerceAtMost(ClipExporter.MAX_AD_MS)
+            val duration = probe.durationMs.takeIf { it > 0 } ?: 10_000L
             _state.update {
                 it.copy(
                     adSet = true,
@@ -571,6 +582,28 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             .trim()
             .take(60)
             .ifBlank { "clip" }
+
+    private fun hasAudioTrack(context: Context, uri: Uri): Boolean {
+        val extractor = MediaExtractor()
+        try {
+            val afd = context.contentResolver.openAssetFileDescriptor(uri, "r")
+            if (afd != null) {
+                afd.use {
+                    extractor.setDataSource(it.fileDescriptor, it.startOffset, it.length)
+                }
+            } else {
+                extractor.setDataSource(context, uri)
+            }
+            for (index in 0 until extractor.trackCount) {
+                val mime = extractor.getTrackFormat(index)
+                    .getString(MediaFormat.KEY_MIME)
+                if (mime?.startsWith("audio/") == true) return true
+            }
+            return false
+        } finally {
+            extractor.release()
+        }
+    }
 
     private fun loadVideoThumbnail(context: Context, uri: Uri, maxSide: Int): Bitmap? {
         val retriever = MediaMetadataRetriever()

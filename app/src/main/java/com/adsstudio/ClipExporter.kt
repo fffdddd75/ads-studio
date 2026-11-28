@@ -6,7 +6,9 @@ import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.audio.AudioProcessor
+import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.effect.Presentation
+import androidx.media3.effect.SpeedChangeEffect
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.EditedMediaItemSequence
@@ -27,14 +29,23 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
- * Настоящий рендер клипа: кроп под выбранный формат, видео-реклама в середине
- * каждой минуты, аппаратное кодирование H.264/AAC через Media3 Transformer.
+ * Настоящий рендер клипа: кроп под выбранный формат, непрозрачная видео-реклама
+ * со звуком и паузой основного клипа, аппаратное кодирование H.264/AAC.
+ *
+ * Правила вставки:
+ * - клип до 1 минуты: один баннер ровно в середине;
+ * - длиннее 1 минуты: 0:30, 1:30, 2:30… в готовом видео;
+ * - количество вставок считается по длине исходного клипа, поэтому у клипа
+ *   2:30 третий баннер на 2:30 не ставится, а у 2:50 — ставится.
  */
 object ClipExporter {
 
     const val MAX_AD_MS = 10_000L
+    const val MAX_AD_SPEED = 1.1f
     private const val AD_FIRST_MS = 30_000L
     private const val AD_EVERY_MS = 60_000L
+    private const val MIN_TAIL_MS = 5_000L
+    private const val SINGLE_AD_LIMIT_MS = 60_000L
 
     suspend fun export(
         context: Context,
@@ -115,11 +126,6 @@ object ClipExporter {
         outFile
     }
 
-    /**
-     * Реклама встаёт в готовом клипе на 0:30, 1:30, 2:30, 3:30…
-     * Длительность рекламы учитывается, поэтому следующая вставка снова
-     * попадает ровно на середину следующей минуты готового видео.
-     */
     private fun buildSequenceItems(
         uri: Uri,
         startMs: Long,
@@ -133,18 +139,22 @@ object ClipExporter {
         if (clipDuration <= 0L) return emptyList()
 
         val items = mutableListOf<EditedMediaItem>()
-        val adDuration = adDurationMs
-            ?.coerceIn(1L, MAX_AD_MS)
-            ?: 0L
-        if (adUri == null || adDuration <= 0L) {
+        val adSourceDuration = adDurationMs?.coerceAtLeast(1L) ?: 0L
+        if (adUri == null || adSourceDuration <= 0L) {
             items += mainItem(uri, startMs, endMs, outputWidth, outputHeight)
             return items
         }
 
+        val targets = adTargets(clipDuration)
+        if (targets.isEmpty()) {
+            items += mainItem(uri, startMs, endMs, outputWidth, outputHeight)
+            return items
+        }
+
+        val plan = adPlan(adSourceDuration)
         var sourceCursor = startMs
         var outputCursor = 0L
-        var target = AD_FIRST_MS
-        while (target <= clipDuration && sourceCursor < endMs) {
+        for (target in targets) {
             val contentDuration = (target - outputCursor).coerceAtLeast(0L)
             val segmentEnd = (sourceCursor + contentDuration).coerceAtMost(endMs)
             if (segmentEnd > sourceCursor) {
@@ -159,16 +169,59 @@ object ClipExporter {
                 sourceCursor = segmentEnd
             }
             if (sourceCursor >= endMs) break
-
-            items += adItem(adUri, adDuration, outputWidth, outputHeight)
-            outputCursor += adDuration
-            target += AD_EVERY_MS
+            items += adItem(adUri, plan, outputWidth, outputHeight)
+            outputCursor += plan.outputDurationMs
         }
 
         if (sourceCursor < endMs) {
             items += mainItem(uri, sourceCursor, endMs, outputWidth, outputHeight)
         }
         return items
+    }
+
+    private fun adTargets(clipDurationMs: Long): List<Long> {
+        if (clipDurationMs <= SINGLE_AD_LIMIT_MS) {
+            val middle = clipDurationMs / 2
+            return if (middle > 0L) listOf(middle) else emptyList()
+        }
+
+        val targets = mutableListOf<Long>()
+        val lastAllowed = clipDurationMs - MIN_TAIL_MS
+        var target = AD_FIRST_MS
+        while (target <= lastAllowed) {
+            targets += target
+            target += AD_EVERY_MS
+        }
+        return targets
+    }
+
+    /**
+     * Если реклама длиннее 10 секунд, ускоряем её не больше чем до x1.1
+     * и обрезаем так, чтобы на выходе получилось ровно до 10 секунд.
+     */
+    private data class AdPlan(
+        val sourceEndMs: Long,
+        val outputDurationMs: Long,
+        val speed: Float
+    )
+
+    private fun adPlan(sourceDurationMs: Long): AdPlan {
+        if (sourceDurationMs <= MAX_AD_MS) {
+            return AdPlan(
+                sourceEndMs = sourceDurationMs,
+                outputDurationMs = sourceDurationMs,
+                speed = 1f
+            )
+        }
+        val speed = (sourceDurationMs.toFloat() / MAX_AD_MS.toFloat())
+            .coerceIn(1f, MAX_AD_SPEED)
+        val sourceEnd = (MAX_AD_MS * speed).toLong().coerceAtMost(sourceDurationMs)
+        val outputDuration = (sourceEnd / speed).toLong().coerceAtMost(MAX_AD_MS)
+        return AdPlan(
+            sourceEndMs = sourceEnd,
+            outputDurationMs = outputDuration,
+            speed = speed
+        )
     }
 
     private fun mainItem(
@@ -187,37 +240,51 @@ object ClipExporter {
             .setClippingConfiguration(clipping)
             .build()
         return EditedMediaItem.Builder(mediaItem)
-            .setEffects(effects(outputWidth, outputHeight))
+            .setEffects(effects(outputWidth, outputHeight, 1f))
             .build()
     }
 
     private fun adItem(
         uri: Uri,
-        durationMs: Long,
+        plan: AdPlan,
         outputWidth: Int,
         outputHeight: Int
     ): EditedMediaItem {
         val clipping = MediaItem.ClippingConfiguration.Builder()
             .setStartPositionMs(0L)
-            .setEndPositionMs(durationMs)
+            .setEndPositionMs(plan.sourceEndMs)
             .build()
         val mediaItem = MediaItem.Builder()
             .setUri(uri)
             .setClippingConfiguration(clipping)
             .build()
         return EditedMediaItem.Builder(mediaItem)
-            .setEffects(effects(outputWidth, outputHeight))
+            .setEffects(effects(outputWidth, outputHeight, plan.speed))
             .build()
     }
 
-    private fun effects(outputWidth: Int, outputHeight: Int): Effects {
-        val videoEffects = listOf<Effect>(
-            Presentation.createForWidthAndHeight(
-                outputWidth,
-                outputHeight,
-                Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
-            )
+    private fun effects(
+        outputWidth: Int,
+        outputHeight: Int,
+        speed: Float
+    ): Effects {
+        val videoEffects = mutableListOf<Effect>()
+        if (speed > 1.001f) {
+            videoEffects += SpeedChangeEffect(speed)
+        }
+        videoEffects += Presentation.createForWidthAndHeight(
+            outputWidth,
+            outputHeight,
+            Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
         )
-        return Effects(emptyList<AudioProcessor>(), videoEffects)
+
+        val audioEffects = if (speed > 1.001f) {
+            listOf<AudioProcessor>(
+                SonicAudioProcessor().apply { setSpeed(speed) }
+            )
+        } else {
+            emptyList()
+        }
+        return Effects(audioEffects, videoEffects)
     }
 }
