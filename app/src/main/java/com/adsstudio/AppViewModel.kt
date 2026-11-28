@@ -4,7 +4,7 @@ import android.app.ActivityManager
 import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
@@ -36,7 +36,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val state: StateFlow<UiState> = _state.asStateFlow()
 
     private val models = ModelManager(application)
-    private var adBitmap: Bitmap? = null
     private var analysisJob: Job? = null
 
     init {
@@ -350,22 +349,37 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun setAd(uri: Uri) {
+        val app = getApplication<Application>()
         viewModelScope.launch {
-            val bitmap = withContext(Dispatchers.IO) {
-                decodeSampled(uri, 512)
+            val probe = withContext(Dispatchers.IO) {
+                runCatching { VideoProbe.probe(app, uri) }.getOrNull()
             }
-            if (bitmap == null) {
-                _state.update { it.copy(error = "Не удалось прочитать картинку") }
+            if (probe == null) {
+                _state.update { it.copy(error = "Не удалось прочитать видео-рекламу") }
                 return@launch
             }
-            adBitmap = bitmap
-            _state.update { it.copy(adSet = true, adPreview = bitmap) }
+
+            val thumbnail = withContext(Dispatchers.IO) {
+                runCatching { loadVideoThumbnail(app, uri, 512) }.getOrNull()
+            }
+            val duration = (probe.durationMs.takeIf { it > 0 } ?: 10_000L)
+                .coerceAtMost(ClipExporter.MAX_AD_MS)
+            _state.update {
+                it.copy(
+                    adSet = true,
+                    adUri = uri,
+                    adDurationMs = duration,
+                    adPreview = thumbnail,
+                    error = null
+                )
+            }
         }
     }
 
     fun clearAd() {
-        adBitmap = null
-        _state.update { it.copy(adSet = false, adPreview = null) }
+        _state.update {
+            it.copy(adSet = false, adUri = null, adDurationMs = null, adPreview = null)
+        }
     }
 
     fun setRatio(ratio: OutputRatio) {
@@ -464,7 +478,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     uri = uri,
                     startMs = clip.startMs,
                     endMs = clip.endMs,
-                    ad = adBitmap,
+                    adUri = _state.value.adUri,
+                    adDurationMs = _state.value.adDurationMs,
                     outputWidth = ratio.width,
                     outputHeight = ratio.height,
                     outFile = outFile,
@@ -557,21 +572,34 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             .take(60)
             .ifBlank { "clip" }
 
-    private fun decodeSampled(uri: Uri, maxSide: Int): Bitmap? {
-        val resolver = getApplication<Application>().contentResolver
-
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        resolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-
-        var sample = 1
-        while (bounds.outWidth / sample > maxSide || bounds.outHeight / sample > maxSide) {
-            sample *= 2
-        }
-
-        val options = BitmapFactory.Options().apply { inSampleSize = sample }
-        return resolver.openInputStream(uri)?.use {
-            BitmapFactory.decodeStream(it, null, options)
+    private fun loadVideoThumbnail(context: Context, uri: Uri, maxSide: Int): Bitmap? {
+        val retriever = MediaMetadataRetriever()
+        try {
+            val afd = context.contentResolver.openAssetFileDescriptor(uri, "r")
+            if (afd != null) {
+                afd.use {
+                    retriever.setDataSource(it.fileDescriptor, it.startOffset, it.length)
+                }
+            } else {
+                retriever.setDataSource(context, uri)
+            }
+            val frame = retriever.getFrameAtTime(
+                0L,
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+            ) ?: return null
+            val longestSide = maxOf(frame.width, frame.height).coerceAtLeast(1)
+            if (longestSide <= maxSide) return frame
+            val scale = maxSide.toFloat() / longestSide
+            val scaled = Bitmap.createScaledBitmap(
+                frame,
+                (frame.width * scale).toInt().coerceAtLeast(1),
+                (frame.height * scale).toInt().coerceAtLeast(1),
+                true
+            )
+            if (scaled !== frame) frame.recycle()
+            return scaled
+        } finally {
+            retriever.release()
         }
     }
 }

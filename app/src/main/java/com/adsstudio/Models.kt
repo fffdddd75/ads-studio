@@ -40,6 +40,8 @@ data class UiState(
     val llmEnabled: Boolean = true,
     val llmReady: Boolean = false,
     val adSet: Boolean = false,
+    val adUri: Uri? = null,
+    val adDurationMs: Long? = null,
     val adPreview: Bitmap? = null,
     val busy: String? = null,
     val progress: Float? = null,

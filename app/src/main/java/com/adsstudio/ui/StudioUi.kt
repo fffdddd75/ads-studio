@@ -623,7 +623,9 @@ private fun AgentTag(title: String, subtitle: String) {
 
 @Composable
 fun AdCard(
+    adSet: Boolean,
     adPreview: Bitmap?,
+    adDurationMs: Long?,
     onPick: () -> Unit,
     onClear: () -> Unit,
     enabled: Boolean,
@@ -636,11 +638,11 @@ fun AdCard(
             .clip(shape)
             .background(StudioColors.Surface)
             .dashedBorder(
-                color = if (adPreview != null) StudioColors.Orange.copy(alpha = 0.55f)
+                color = if (adSet) StudioColors.Orange.copy(alpha = 0.55f)
                 else StudioColors.Border,
                 radius = 24.dp
             )
-            .clickable(enabled = enabled && adPreview == null, onClick = onPick)
+            .clickable(enabled = enabled && !adSet, onClick = onPick)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -649,20 +651,34 @@ fun AdCard(
                 .size(58.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(
-                    if (adPreview != null) Color.Transparent else StudioColors.SurfaceHigh
+                    if (adSet) Color.Transparent else StudioColors.SurfaceHigh
                 ),
             contentAlignment = Alignment.Center
         ) {
             if (adPreview != null) {
                 Image(
                     bitmap = adPreview.asImageBitmap(),
-                    contentDescription = "Реклама",
+                    contentDescription = "Видео-реклама",
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.55f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.PlayArrow,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
             } else {
                 Icon(
-                    imageVector = Icons.Rounded.Add,
+                    imageVector = if (adSet) Icons.Rounded.PlayArrow else Icons.Rounded.Add,
                     contentDescription = null,
                     tint = StudioColors.Orange,
                     modifier = Modifier.size(24.dp)
@@ -672,19 +688,23 @@ fun AdCard(
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                if (adPreview != null) "Реклама добавлена" else "Добавить рекламу",
+                if (adSet) "Видео-реклама добавлена" else "Добавить видео-рекламу",
                 style = MaterialTheme.typography.titleMedium,
                 color = StudioColors.Text
             )
             Spacer(Modifier.height(3.dp))
             Text(
-                if (adPreview != null) "Появится в начале каждого клипа"
-                else "PNG или JPG · в начале каждого клипа",
+                if (adSet) {
+                    val seconds = ((adDurationMs ?: 0L) / 1000L).coerceAtLeast(1L)
+                    "$seconds с · на 0:30, 1:30, 2:30…"
+                } else {
+                    "MP4 до 10 секунд · в середине каждой минуты"
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = StudioColors.TextMuted
             )
         }
-        if (adPreview != null) {
+        if (adSet) {
             TextButton(onClick = onClear, enabled = enabled) {
                 Text("Убрать", color = StudioColors.TextMuted)
             }

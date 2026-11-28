@@ -87,7 +87,7 @@ fun AdsStudioApp(vm: AppViewModel = viewModel()) {
             ActivityResultContracts.PickVisualMedia()
         ) { uri -> if (uri != null) vm.onVideoPicked(uri) }
 
-        val imagePicker = rememberLauncherForActivityResult(
+        val adPicker = rememberLauncherForActivityResult(
             ActivityResultContracts.PickVisualMedia()
         ) { uri -> if (uri != null) vm.setAd(uri) }
 
@@ -98,8 +98,8 @@ fun AdsStudioApp(vm: AppViewModel = viewModel()) {
         }
 
         val pickAd: () -> Unit = {
-            imagePicker.launch(
-                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+            adPicker.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)
             )
         }
 
@@ -197,8 +197,8 @@ private fun Hero() {
             style = MaterialTheme.typography.displayLarge
         )
         Text(
-            "Нейросеть находит сильные моменты, режет и вставляет рекламу. " +
-                "Всё на телефоне, без облака.",
+            "Нейросеть находит сильные моменты, режет и вставляет видео-рекламу " +
+                "в середине каждой минуты. Всё на телефоне, без облака.",
             style = MaterialTheme.typography.bodyMedium,
             color = StudioColors.TextMuted
         )
@@ -276,7 +276,9 @@ private fun ProjectContent(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 SectionHeader("04", "Реклама")
                 AdCard(
+                    adSet = state.adSet,
                     adPreview = state.adPreview,
+                    adDurationMs = state.adDurationMs,
                     onPick = onPickAd,
                     onClear = vm::clearAd,
                     enabled = state.busy == null
