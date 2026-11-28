@@ -9,7 +9,7 @@ import kotlin.math.abs
 /**
  * Лёгкий видеомодуль: смотрит кадры вокруг выбранных моментов, находит
  * склейки и движение и достраивает границы клипа. Это не 3B-видеомодель,
- * память почти не тратит: 15–20 кадров на клип.
+ * память почти не тратит: 40–60 кадров на клип.
  *
  * Зачем: 0.5B-редактор часто выбирает начало истории и обрывает её на
  * 10-й секунде, до развязки. Здесь мы доклеиваем продолжение по речи,
@@ -27,6 +27,25 @@ object VideoVision {
     private const val SAMPLE_STEP_MS = 600L
     private const val PRE_ROLL_MS = 3_000L
     private const val POST_ROLL_MS = 15_000L
+    private val genericLeadIns = listOf(
+        "вторая на сегодня", "первая на сегодня", "первый на сегодня",
+        "ещё одна", "еще одна", "следующая история", "следующая новость",
+        "а теперь", "тем временем", "напомню", "как вы знаете", "как вы помните",
+        "в этом видео", "сегодня расскажу", "сегодня поговорим", "продолжение",
+        "ранее", "до этого", "итак", "и так"
+    )
+
+    private val specificMarkers = listOf(
+        "гольф", "авари", "трагед", "дтп", "машин", "водител", "мужчин",
+        "парн", "девушк", "ребят", "улиц", "район", "город", "университет",
+        "номер", "истор", "случа", "произош", "столкнов", "вреза", "погиб",
+        "пострада", "погибл"
+    )
+
+    private val datePattern = Regex(
+        "\\b\\d{1,2}\\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)"
+    )
+
     private const val CUT_THRESHOLD = 42f
     private const val MOTION_THRESHOLD = 18f
     private const val MIN_CLIP_MS = 16_000L
@@ -214,6 +233,12 @@ object VideoVision {
         if (end - start > maxClipMs) end = start + maxClipMs
         if (end <= start) return clip
 
+        // Если клип начинается с «вторая на сегодня / в этом видео / итак»,
+        // сдвигаем старт к первой конкретной фразе: дате, герою или событию.
+        trimGenericLeadIn(start, end, utterances)?.let { trimmed ->
+            if (trimmed < end - 2_000) start = trimmed
+        }
+
         val finalText = utterances
             .filter { it.endMs >= start && it.startMs <= end }
             .joinToString(" ") { it.text }
@@ -222,6 +247,32 @@ object VideoVision {
             endMs = end,
             text = finalText.ifBlank { clip.text }
         )
+    }
+
+    private fun trimGenericLeadIn(
+        start: Long,
+        end: Long,
+        utterances: List<Utterance>
+    ): Long? {
+        val opening = utterances.filter {
+            it.startMs >= start - 400 && it.startMs <= start + 15_000 && it.endMs <= end
+        }
+        val first = opening.firstOrNull() ?: return null
+        val firstLower = first.text.lowercase()
+        val generic = genericLeadIns.any { firstLower.contains(it) }
+        if (!generic) return null
+        if (datePattern.containsMatchIn(firstLower)) return null
+
+        val specific = opening.drop(1).firstOrNull {
+            it.startMs - start <= 15_000 && isSpecific(it.text)
+        } ?: return null
+        return (specific.startMs - 300L).coerceAtLeast(start)
+    }
+
+    private fun isSpecific(text: String): Boolean {
+        val lower = text.lowercase()
+        if (datePattern.containsMatchIn(lower)) return true
+        return specificMarkers.any { lower.contains(it) }
     }
 
     private fun signature(bitmap: Bitmap): IntArray {

@@ -531,7 +531,13 @@ private fun ClipsSection(
         ClipPreviewDialog(
             videoUri = videoUri,
             clip = clipToPlay,
-            onDismiss = { previewClip = null }
+            onDismiss = { previewClip = null },
+            onTrimStart = { delta ->
+                previewClip = vm.trimClipStart(clipToPlay, delta)
+            },
+            onTrimEnd = { delta ->
+                previewClip = vm.trimClipEnd(clipToPlay, delta)
+            }
         )
     }
 }
@@ -540,7 +546,9 @@ private fun ClipsSection(
 private fun ClipPreviewDialog(
     videoUri: Uri,
     clip: SuggestedClip,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onTrimStart: (Long) -> Unit,
+    onTrimEnd: (Long) -> Unit
 ) {
     val context = LocalContext.current
     val player = remember(videoUri, clip.startMs, clip.endMs) {
@@ -626,11 +634,56 @@ private fun ClipPreviewDialog(
                 )
             }
 
+            TrimRow(
+                label = "Старт",
+                value = clip.startMs,
+                onMinus = { onTrimStart(-500L) },
+                onPlus = { onTrimStart(500L) }
+            )
+            TrimRow(
+                label = "Конец",
+                value = clip.endMs,
+                onMinus = { onTrimEnd(-500L) },
+                onPlus = { onTrimEnd(500L) }
+            )
+
             Text(
-                "Играет только выбранный отрезок исходного видео.",
+                "Подправь границы по 0,5 с — экспорт возьмёт новые. Видео играет только выбранный отрезок.",
                 style = MaterialTheme.typography.bodySmall,
                 color = StudioColors.TextDim
             )
+        }
+    }
+}
+
+@Composable
+private fun TrimRow(
+    label: String,
+    value: Long,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            color = StudioColors.TextMuted,
+            modifier = Modifier.width(54.dp)
+        )
+        Text(
+            formatTimecode(value),
+            style = StudioType.monoSmall,
+            color = StudioColors.Cyan,
+            modifier = Modifier.weight(1f)
+        )
+        TextButton(onClick = onMinus) {
+            Text("−0,5 с", color = StudioColors.Text, style = MaterialTheme.typography.labelLarge)
+        }
+        TextButton(onClick = onPlus) {
+            Text("+0,5 с", color = StudioColors.Text, style = MaterialTheme.typography.labelLarge)
         }
     }
 }

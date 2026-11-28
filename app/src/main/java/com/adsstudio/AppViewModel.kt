@@ -372,6 +372,36 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(ratio = ratio) }
     }
 
+    fun trimClipStart(clip: SuggestedClip, deltaMs: Long): SuggestedClip {
+        val maxStart = (clip.endMs - 2_000L).coerceAtLeast(0L)
+        val updated = clip.copy(
+            startMs = (clip.startMs + deltaMs).coerceIn(0L, maxStart)
+        )
+        replaceClip(clip, updated)
+        return updated
+    }
+
+    fun trimClipEnd(clip: SuggestedClip, deltaMs: Long): SuggestedClip {
+        val duration = _state.value.info?.durationMs ?: Long.MAX_VALUE
+        val minEnd = (clip.startMs + 2_000L).coerceAtLeast(0L)
+        val maxEnd = duration.coerceAtLeast(minEnd)
+        val updated = clip.copy(
+            endMs = (clip.endMs + deltaMs).coerceIn(minEnd, maxEnd)
+        )
+        replaceClip(clip, updated)
+        return updated
+    }
+
+    private fun replaceClip(old: SuggestedClip, updated: SuggestedClip) {
+        _state.update { state ->
+            state.copy(
+                clips = state.clips.map {
+                    if (it.startMs == old.startMs && it.endMs == old.endMs) updated else it
+                }
+            )
+        }
+    }
+
     fun setMaxClipMs(value: Long) {
         val clamped = value.coerceIn(60_000L, 240_000L)
         prefs.edit().putLong("max_clip_ms", clamped).apply()
