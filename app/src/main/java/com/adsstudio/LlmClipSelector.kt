@@ -36,16 +36,17 @@ object LlmClipSelector {
             Выбирай законченную историю: завязка и развязка. Если есть «секрет», «сейчас расскажу», «и тут»,
             но нет «оказалось», «в итоге», «вот почему» или финала — это обрывок, не выбирай его.
             Подсказки: [движение 0.8] — действие; [склейки 2] — смена планов; [звук 0.7] — громкая речь.
-            Фрагменты могут быть длиной до 4 минут: смотри начало, середину и конец, а не только первые слова.
+            Фрагменты могут быть длиной до 4 минут: смотри начало, середину и конец.
             Пример: «Всем привет, сегодня...» — скучно. «Вдруг машина выскочила...» — интересно.
-            Отвечай только номерами через запятую, от лучшего к худшему. Без объяснений.
+            Верни только номера через запятую, от лучшего к худшему. Без объяснений.
+            Пример формата: ВЫБОР: 3, 5, 1, 2, 4
             <|im_end|>
             <|im_start|>user
             Выбери $count самых интересных фрагментов. Сначала смысл, потом движение и звук.
             ${candidateList(candidates, hints)}
             <|im_end|>
             <|im_start|>assistant
-        """.trimIndent()
+        """.trimIndent() + "ВЫБОР:"
     }
 
     /** Первый агент: смотрит список и придумывает проверочные вопросы. */
@@ -79,24 +80,42 @@ object LlmClipSelector {
         val checklist = questions.ifBlank { defaultQuestions }.take(300)
         return """
             <|endoftext|><|im_start|>system
-            Ты — редактор вирусных видео. Ответь на вопросы критика и выбери $count лучших фрагментов.
+            Ты — редактор вирусных видео. Используй вопросы критика как критерии и выбери $count лучших фрагментов.
             Главное — конкретное событие, конфликт, неожиданность, польза или эмоция.
             Не выбирай приветствие, «в этом видео», рекламу, подписку и воду.
             Выбирай только законченную историю: завязка + развязка. Обрывок без финала не выбирай.
             Подсказки: [движение 0.8] — действие; [склейки 2] — смена планов; [звук 0.7] — громкая речь.
-            Фрагменты могут быть длиной до 4 минут: смотри начало, середину и конец, а не только первые слова.
+            Фрагменты могут быть длиной до 4 минут: смотри начало, середину и конец.
+            Вопросы критика — это только критерии. Не отвечай на них текстом.
             <|im_end|>
             <|im_start|>user
-            Вопросы критика:
+            Критерии:
             $checklist
 
             Фрагменты:
             ${candidateList(candidates, emptyMap())}
 
             Верни ТОЛЬКО номера через запятую, от лучшего к худшему. Без слов и объяснений.
+            Формат: ВЫБОР: 3, 5, 1, 2, 4
             <|im_end|>
             <|im_start|>assistant
-        """.trimIndent()
+        """.trimIndent() + "ВЫБОР:"
+    }
+
+    /** Короткий запрос-запасной вариант: меньше контекста, жёсткий формат ответа. */
+    fun compactPrompt(candidates: List<SuggestedClip>, maxClips: Int): String {
+        val count = minOf(maxClips, candidates.size)
+        return """
+            <|endoftext|><|im_start|>system
+            Ты выбираешь лучшие законченные фрагменты. Верни только номера через запятую.
+            <|im_end|>
+            <|im_start|>user
+            ${candidateList(candidates, emptyMap())}
+
+            Выбери $count номеров. Формат: ВЫБОР: 3, 5, 1, 2, 4
+            <|im_end|>
+            <|im_start|>assistant
+        """.trimIndent() + "ВЫБОР:"
     }
 
     fun parse(response: String, candidateCount: Int, maxClips: Int): List<Int> {
@@ -116,24 +135,45 @@ object LlmClipSelector {
      * Если её нет — берём номера, помеченные как СИЛЬНЫЙ.
      */
     fun parseEditorChoice(response: String, candidateCount: Int, maxClips: Int): List<Int> {
-        val lower = response.lowercase()
-        val choiceIndex = lower.lastIndexOf("выбор")
-        if (choiceIndex >= 0) {
-            val afterChoice = response.substring(choiceIndex + 5)
-            val choiceLine = afterChoice.lineSequence()
-                .firstOrNull { line -> line.any { it.isDigit() } }
-                .orEmpty()
-            // Берём только числовой префикс: «1, 3, 5 из 8» не должно добавлять 8.
-            val numeric = choiceLine.takeWhile { ch ->
-                ch.isDigit() || ch.isWhitespace() || ch in ",;.:-—–"
-            }
-            val choice = numbers(numeric, candidateCount, maxClips)
+        val keyword = Regex(
+            "(?i)(?:выбор|ответ|итог|номера|лучшие)\\s*[:\\-—]?\\s*([\\d\\s,;.]+)"
+        ).findAll(response).lastOrNull()
+        if (keyword != null) {
+            val choice = numbers(
+                keyword.groupValues.getOrElse(1) { "" },
+                candidateCount,
+                maxClips
+            )
             if (choice.isNotEmpty()) return choice
         }
+
+        val numericLine = parseNumericLine(response, candidateCount, maxClips)
+        if (numericLine.isNotEmpty()) return numericLine
 
         val strong = parseStrong(response, candidateCount)
         if (strong.isNotEmpty()) return strong.take(maxClips)
         return emptyList()
+    }
+
+    /** Берёт последнюю строку, целиком состоящую из номеров и разделителей. */
+    fun parseNumericLine(response: String, candidateCount: Int, maxClips: Int): List<Int> {
+        val numericLine = response.lineSequence()
+            .map { it.trim().trim('*', '_', ' ') }
+            .filter { it.isNotEmpty() }
+            .lastOrNull { it.matches(Regex("[\\d\\s,;.:—–-]+")) }
+            ?: return emptyList()
+        return numbers(numericLine, candidateCount, maxClips)
+    }
+
+    /** Понимает «фрагмент 3», «номер 5», если модель не написала чистый список. */
+    fun parseMentions(response: String, candidateCount: Int, maxClips: Int): List<Int> {
+        return Regex("(?i)(?:фрагмент|номер|вариант|клип)\\s*[№#:]?\\s*(\\d+)")
+            .findAll(response)
+            .mapNotNull { it.groupValues.getOrNull(1)?.toIntOrNull() }
+            .filter { it in 1..candidateCount }
+            .distinct()
+            .take(maxClips)
+            .toList()
     }
 
     /**
@@ -142,8 +182,10 @@ object LlmClipSelector {
      */
     fun parseLooseChoice(response: String, candidateCount: Int, maxClips: Int): List<Int> {
         val lower = response.lowercase()
-        val answerIndex = lower.lastIndexOf("ответ")
-        val raw = if (answerIndex >= 0) response.substring(answerIndex + 6) else response
+        val answerIndex = listOf("ответ", "выбор", "итог")
+            .map { lower.lastIndexOf(it) }
+            .maxOrNull() ?: -1
+        val raw = if (answerIndex >= 0) response.substring(answerIndex + 5) else response
         val cleaned = raw.trim().trim('.', ':', ' ', '\n', '\r', '—', '-')
         if (!cleaned.matches(Regex("[\\d,\\s.;:—–-]+"))) return emptyList()
         return numbers(cleaned, candidateCount, maxClips)
@@ -184,12 +226,12 @@ object LlmClipSelector {
         hints: Map<Int, String>
     ): String = candidates.mapIndexed { index, clip ->
         val full = clip.text.replace(Regex("\\s+"), " ").trim()
-        val body = if (full.length <= 180) {
+        val body = if (full.length <= 140) {
             full
         } else {
-            val middleStart = (full.length / 2 - 40).coerceAtLeast(0)
-            val middleEnd = (full.length / 2 + 40).coerceAtMost(full.length)
-            "${full.take(80)} … ${full.substring(middleStart, middleEnd).trim()} … ${full.takeLast(80)}"
+            val middleStart = (full.length / 2 - 30).coerceAtLeast(0)
+            val middleEnd = (full.length / 2 + 30).coerceAtMost(full.length)
+            "${full.take(60)} … ${full.substring(middleStart, middleEnd).trim()} … ${full.takeLast(60)}"
         }
         val seconds = ((clip.endMs - clip.startMs) / 1000).coerceAtLeast(1)
         val length = if (seconds >= 120) "${seconds / 60} мин" else "$seconds с"

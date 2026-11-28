@@ -512,6 +512,13 @@ private fun ClipsSection(
             style = MaterialTheme.typography.bodySmall,
             color = StudioColors.TextMuted
         )
+        if (state.adSet) {
+            Text(
+                "Реклама вставляется только в готовый файл при экспорте; в превью — исходник.",
+                style = MaterialTheme.typography.bodySmall,
+                color = StudioColors.Orange
+            )
+        }
         state.clips.forEachIndexed { index, clip ->
             ClipCard(
                 index = index,

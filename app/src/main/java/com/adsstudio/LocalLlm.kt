@@ -15,7 +15,7 @@ class LocalLlm(private val context: Context) : Closeable {
     fun load(modelPath: String) {
         val options = LlmInference.LlmInferenceOptions.builder()
             .setModelPath(modelPath)
-            .setMaxTokens(1280)
+            .setMaxTokens(2048)
             .setMaxTopK(40)
             .setPreferredBackend(LlmInference.Backend.CPU)
             .build()

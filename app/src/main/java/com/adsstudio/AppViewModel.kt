@@ -269,7 +269,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(busy = "Памяти мало: агенты работают по очереди…") }
             }
 
-            val pool = ClipPicker.pickFromCandidates(candidates, 8)
+            val pool = ClipPicker.pickFromCandidates(candidates, 6)
                 .sortedByDescending { it.score }
 
             // Первый агент: критик придумывает проверочные вопросы по кандидатам.
@@ -284,9 +284,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 (editorLlm ?: critic).generate(LlmClipSelector.editorPrompt(pool, 5, questions))
             }
 
-            var indices = LlmClipSelector.parseEditorChoice(response, pool.size, 5)
-                .ifEmpty { LlmClipSelector.parseLooseChoice(response, pool.size, 5) }
-                .ifEmpty { LlmClipSelector.parse(response, pool.size, 5) }
+            var indices = parseLlmChoice(response, pool.size, 5)
 
             // Если редактор не дал номеров, пробуем короткий одношаговый запрос:
             // маленькой модели так проще, а результат всё равно смешается с эвристикой.
@@ -294,13 +292,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update {
                     it.copy(busy = "Редактор не ответил — пробую короткий запрос…")
                 }
-                val fallback = withContext(Dispatchers.Default) {
-                    (editorLlm ?: critic).generate(LlmClipSelector.prompt(pool, 5))
+                var chosenFallback = withContext(Dispatchers.Default) {
+                    (editorLlm ?: critic).generate(LlmClipSelector.compactPrompt(pool, 5))
                 }
-                val fallbackIndices = LlmClipSelector.parse(fallback, pool.size, 5)
-                    .ifEmpty { LlmClipSelector.parseLooseChoice(fallback, pool.size, 5) }
+                var fallbackIndices = parseLlmChoice(chosenFallback, pool.size, 5)
+                if (fallbackIndices.isEmpty()) {
+                    val simple = withContext(Dispatchers.Default) {
+                        (editorLlm ?: critic).generate(LlmClipSelector.prompt(pool, 5))
+                    }
+                    val simpleIndices = parseLlmChoice(simple, pool.size, 5)
+                    if (simpleIndices.isNotEmpty()) {
+                        chosenFallback = simple
+                        fallbackIndices = simpleIndices
+                    }
+                }
                 if (fallbackIndices.isNotEmpty()) {
-                    response = fallback
+                    response = chosenFallback
                     indices = fallbackIndices
                 }
             }
@@ -350,6 +357,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun parseLlmChoice(
+        response: String,
+        candidateCount: Int,
+        maxClips: Int
+    ): List<Int> {
+        return LlmClipSelector.parseEditorChoice(response, candidateCount, maxClips)
+            .ifEmpty { LlmClipSelector.parseLooseChoice(response, candidateCount, maxClips) }
+            .ifEmpty { LlmClipSelector.parseNumericLine(response, candidateCount, maxClips) }
+            .ifEmpty { LlmClipSelector.parseMentions(response, candidateCount, maxClips) }
+            .ifEmpty { LlmClipSelector.parse(response, candidateCount, maxClips) }
+    }
+
     fun setAd(uri: Uri) {
         val app = getApplication<Application>()
         viewModelScope.launch {
@@ -381,6 +400,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     adUri = uri,
                     adDurationMs = duration,
                     adPreview = thumbnail,
+                    output = null,
+                    outputTitle = null,
+                    exportingClipStart = null,
+                    notice = "Реклама добавлена — она войдёт в следующий экспорт.",
                     error = null
                 )
             }
@@ -389,7 +412,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun clearAd() {
         _state.update {
-            it.copy(adSet = false, adUri = null, adDurationMs = null, adPreview = null)
+            it.copy(
+                adSet = false,
+                adUri = null,
+                adDurationMs = null,
+                adPreview = null,
+                output = null,
+                outputTitle = null,
+                exportingClipStart = null,
+                notice = "Реклама убрана — следующий экспорт будет без неё."
+            )
         }
     }
 
@@ -508,13 +540,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 outFile.delete()
 
+                val adCount = if (
+                    _state.value.adUri != null && _state.value.adDurationMs != null
+                ) {
+                    ClipExporter.adCount(clip.startMs, clip.endMs)
+                } else {
+                    0
+                }
                 _state.update {
                     it.copy(
                         busy = null,
                         progress = null,
                         output = galleryUri,
                         outputTitle = clip.title,
-                        exportingClipStart = null
+                        exportingClipStart = null,
+                        notice = if (adCount > 0) {
+                            "Готово. Реклама вставлена: $adCount."
+                        } else {
+                            it.notice
+                        }
                     )
                 }
             } catch (error: Exception) {
@@ -617,6 +661,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 retriever.setDataSource(context, uri)
             }
             val frame = retriever.getFrameAtTime(
+                1_000_000L,
+                MediaMetadataRetriever.OPTION_CLOSEST_SYNC
+            ) ?: retriever.getFrameAtTime(
                 0L,
                 MediaMetadataRetriever.OPTION_CLOSEST_SYNC
             ) ?: return null

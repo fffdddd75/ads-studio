@@ -47,6 +47,11 @@ object ClipExporter {
     private const val MIN_TAIL_MS = 5_000L
     private const val SINGLE_AD_LIMIT_MS = 60_000L
 
+    /** Сколько баннеров реально попадёт в клип. */
+    fun adCount(startMs: Long, endMs: Long): Int {
+        return adTargets((endMs - startMs).coerceAtLeast(0L)).size
+    }
+
     suspend fun export(
         context: Context,
         uri: Uri,

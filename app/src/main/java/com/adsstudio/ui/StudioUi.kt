@@ -699,9 +699,9 @@ fun AdCard(
                         adDurationMs ?: 0L,
                         ClipExporter.MAX_AD_MS
                     ) / 1000L).coerceAtLeast(1L)
-                    "$seconds с · звук · в середине каждой минуты"
+                    "$seconds с · звук · в экспорте"
                 } else {
-                    "MP4 со звуком до 10 с · в середине каждой минуты"
+                    "MP4 со звуком до 10 с · в экспорте"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = StudioColors.TextMuted
